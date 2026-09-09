@@ -226,6 +226,20 @@ async def _status(recs: dict[str, Recorder]) -> None:
         log.info("counts %s", {k: r.count for k, r in recs.items()})
 
 
+async def _compress_loop(root: str, every_s: int = 1800) -> None:
+    """Gzip raw files not written to for two hours, so disk use tracks the compressed rate."""
+    from .store import compress_old_files
+
+    while True:
+        await asyncio.sleep(every_s)
+        try:
+            n = await asyncio.to_thread(compress_old_files, root, 7200)
+            if n:
+                log.info("compressed %d raw files", n)
+        except OSError as exc:
+            log.warning("compression failed: %s", exc)
+
+
 async def run(settings: Settings) -> None:
     recs = {
         "rtds": Recorder(settings.data_dir, "rtds"),
@@ -239,6 +253,7 @@ async def run(settings: Settings) -> None:
             clob_task(recs["clob"], registry),
             scheduler(registry, recs["windows"], settings),
             _status(recs),
+            _compress_loop(settings.data_dir),
         )
     finally:
         for r in recs.values():
@@ -251,6 +266,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stdout,
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         asyncio.run(run(Settings()))
     except KeyboardInterrupt:
