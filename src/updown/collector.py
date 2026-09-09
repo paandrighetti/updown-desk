@@ -124,11 +124,7 @@ async def rtds_task(rec: Recorder, settings: Settings) -> None:
     subscribe = {
         "action": "subscribe",
         "subscriptions": [
-            {
-                "topic": "crypto_prices",
-                "type": "update",
-                "filters": ",".join(f"{s}usdt" for s in settings.symbols),
-            },
+            {"topic": "crypto_prices", "type": "update"},
             {"topic": "crypto_prices_chainlink", "type": "update"},
             {"topic": "crypto_prices_twap_thirty", "type": "update"},
             {"topic": "crypto_prices_twap_sixty", "type": "update"},
@@ -151,7 +147,10 @@ async def rtds_task(rec: Recorder, settings: Settings) -> None:
     await _reconnect_loop("rtds", run)
 
 
-async def clob_task(rec: Recorder, registry: Registry) -> None:
+async def clob_task(rec: Recorder, registry: Registry, drop: frozenset[str] = frozenset()) -> None:
+    def keep(obj: dict) -> bool:
+        return not drop or obj.get("event_type") not in drop
+
     async def sender(ws) -> None:
         while True:
             op, ids = await registry.ops.get()
@@ -184,8 +183,9 @@ async def clob_task(rec: Recorder, registry: Registry) -> None:
                         continue
                     if isinstance(obj, list):
                         for item in obj:
-                            rec.write(item)
-                    else:
+                            if keep(item):
+                                rec.write(item)
+                    elif keep(obj):
                         rec.write(obj)
             finally:
                 for t in aux:
@@ -250,7 +250,7 @@ async def run(settings: Settings) -> None:
     try:
         await asyncio.gather(
             rtds_task(recs["rtds"], settings),
-            clob_task(recs["clob"], registry),
+            clob_task(recs["clob"], registry, frozenset(settings.drop_events)),
             scheduler(registry, recs["windows"], settings),
             _status(recs),
             _compress_loop(settings.data_dir),

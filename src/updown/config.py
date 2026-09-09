@@ -18,6 +18,11 @@ class Settings:
     horizon_s: int = int(os.environ.get("UPDOWN_HORIZON_S", "1500"))
     # Keep a window subscribed this long after its end so the market_resolved event is captured.
     grace_s: int = int(os.environ.get("UPDOWN_GRACE_S", "600"))
+    # CLOB event types to skip at collection, comma separated (e.g. "price_change"). Empty keeps
+    # everything. Only a disk-space lever: dropped events are gone for good.
+    drop_events: tuple[str, ...] = tuple(
+        s.strip() for s in os.environ.get("UPDOWN_DROP_EVENTS", "").split(",") if s.strip()
+    )
     # RTDS topic used as the reference price in replay. The resolution source is Chainlink.
     ref_feed: str = os.environ.get("UPDOWN_REF_FEED", "crypto_prices_chainlink")
     telegram_token: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
