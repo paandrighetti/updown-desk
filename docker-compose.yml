@@ -1,0 +1,22 @@
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  reporter:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["updown-report", "--loop", "--hour", "6"]
+    volumes:
+      - ./data:/data
+      - ./reports:/reports
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
