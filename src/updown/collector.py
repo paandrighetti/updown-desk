@@ -28,6 +28,9 @@ from .windows import slug, upcoming_starts
 
 CLOB_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS = "wss://ws-live-data.polymarket.com"
+# Both streams deliver several messages per second. Silence beyond this is a dead socket that
+# TCP has not noticed yet; the watchdog closes it and the reconnect loop takes over.
+STALL_S = {"rtds": 60.0, "clob": 90.0}
 
 log = logging.getLogger("updown.collector")
 
@@ -98,6 +101,18 @@ def _parse(raw: str | bytes) -> object | None:
     return obj if isinstance(obj, (dict, list)) else None
 
 
+async def _recv(ws, name: str):
+    """Next frame, or StallError after STALL_S seconds without one."""
+    try:
+        return await asyncio.wait_for(ws.recv(), timeout=STALL_S[name])
+    except TimeoutError as exc:
+        raise StallError(f"{name}: no message for {STALL_S[name]:.0f} s") from exc
+
+
+class StallError(RuntimeError):
+    pass
+
+
 async def _heartbeat(ws, frame: str, every_s: float) -> None:
     while True:
         await asyncio.sleep(every_s)
@@ -132,13 +147,15 @@ async def rtds_task(rec: Recorder, settings: Settings) -> None:
     }
 
     async def run() -> None:
-        async with websockets.connect(RTDS_WS, ping_interval=None, max_size=None) as ws:
+        async with websockets.connect(
+            RTDS_WS, ping_interval=20, ping_timeout=20, max_size=None
+        ) as ws:
             await ws.send(json.dumps(subscribe))
             hb = asyncio.create_task(_heartbeat(ws, "PING", 5))
             log.info("rtds connected")
             try:
-                async for raw in ws:
-                    obj = _parse(raw)
+                while True:
+                    obj = _parse(await _recv(ws, "rtds"))
                     if obj is not None:
                         rec.write(obj)
             finally:
@@ -160,7 +177,9 @@ async def clob_task(rec: Recorder, registry: Registry, drop: frozenset[str] = fr
     async def run() -> None:
         while not registry.tokens():
             await asyncio.sleep(5)
-        async with websockets.connect(CLOB_WS, ping_interval=None, max_size=None) as ws:
+        async with websockets.connect(
+            CLOB_WS, ping_interval=20, ping_timeout=20, max_size=None
+        ) as ws:
             registry.drain()  # the full set is sent below; queued deltas are stale
             await ws.send(
                 json.dumps(
@@ -177,8 +196,8 @@ async def clob_task(rec: Recorder, registry: Registry, drop: frozenset[str] = fr
                 asyncio.create_task(sender(ws)),
             ]
             try:
-                async for raw in ws:
-                    obj = _parse(raw)
+                while True:
+                    obj = _parse(await _recv(ws, "clob"))
                     if obj is None:
                         continue
                     if isinstance(obj, list):
