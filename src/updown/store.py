@@ -20,6 +20,10 @@ from .windows import base_symbol
 
 _READ = "read_json({paths}, columns={{'rx_ts':'BIGINT','msg':'JSON'}}, format='newline_delimited')"
 
+# Keep DuckDB well under the host's RAM so the reporter can never starve the collector.
+duckdb.execute(f"SET memory_limit='{os.environ.get('UPDOWN_DUCKDB_MEM', '1500MB')}'")
+duckdb.execute("SET temp_directory='/tmp/duckdb_spill'")
+
 
 def _col(path: str, alias: str, cast: str | None = None) -> str:
     """SQL expression extracting a JSON path from the wire payload, optionally cast."""
@@ -42,15 +46,28 @@ def _sql_list(paths: list[str]) -> str:
     return "[" + ",".join("'" + p.replace("'", "''") + "'" for p in paths) + "]"
 
 
-def _query(root: str, source: str, select: str, where: str = "") -> pd.DataFrame:
-    paths = _paths(root, source)
+def _query(paths: list[str], select: str, where: str = "") -> pd.DataFrame:
     if not paths:
         return pd.DataFrame()
     sql = f"SELECT {select} FROM {_READ.format(paths=_sql_list(paths))} {where}"
     return duckdb.sql(sql).df()
 
 
-def load_windows(root: str) -> pd.DataFrame:
+def _day_of(path: str) -> str:
+    return os.path.basename(path)[:8]
+
+
+def raw_days(root: str) -> list[str]:
+    """UTC days (YYYYMMDD) for which raw files exist, from the hourly file names."""
+    days = {_day_of(f) for src in ("rtds", "clob", "windows") for f in _paths(root, src)}
+    return sorted(d for d in days if len(d) == 8 and d.isdigit())
+
+
+def _day_paths(root: str, source: str, day: str) -> list[str]:
+    return [f for f in _paths(root, source) if _day_of(f) == day]
+
+
+def load_windows(paths: list[str]) -> pd.DataFrame:
     cols = ", ".join(
         [
             "rx_ts",
@@ -67,13 +84,13 @@ def load_windows(root: str) -> pd.DataFrame:
             _col("fee_exponent", "fee_exponent", "DOUBLE"),
         ]
     )
-    df = _query(root, "windows", cols)
+    df = _query(paths, cols)
     if df.empty:
         return df
     return df.sort_values("rx_ts").drop_duplicates("slug", keep="last").reset_index(drop=True)
 
 
-def load_feeds(root: str) -> pd.DataFrame:
+def load_feeds(paths: list[str]) -> pd.DataFrame:
     """All RTDS price updates: topic, base symbol, price, observation time, receive time."""
     cols = ", ".join(
         [
@@ -85,8 +102,7 @@ def load_feeds(root: str) -> pd.DataFrame:
         ]
     )
     df = _query(
-        root,
-        "rtds",
+        paths,
         cols,
         _where("type", "update") + " AND json_extract_string(msg,'$.payload.value') IS NOT NULL",
     )
@@ -96,12 +112,12 @@ def load_feeds(root: str) -> pd.DataFrame:
     return df.sort_values("rx_ts").reset_index(drop=True)
 
 
-def load_books(root: str) -> pd.DataFrame:
+def load_books(paths: list[str]) -> pd.DataFrame:
     """Top of book from full 'book' snapshots: best bid/ask price and size per token."""
     cols = ", ".join(
         ["rx_ts", _col("asset_id", "token"), _col("bids", "bids"), _col("asks", "asks")]
     )
-    df = _query(root, "clob", cols, _where("event_type", "book"))
+    df = _query(paths, cols, _where("event_type", "book"))
     if df.empty:
         return df
 
@@ -129,11 +145,11 @@ def load_books(root: str) -> pd.DataFrame:
     return out.sort_values("rx_ts").reset_index(drop=True)
 
 
-def load_resolutions(root: str) -> pd.DataFrame:
+def load_resolutions(paths: list[str]) -> pd.DataFrame:
     cols = ", ".join(
         ["rx_ts", _col("market", "condition_id"), _col("winning_asset_id", "winning_token")]
     )
-    df = _query(root, "clob", cols, _where("event_type", "market_resolved"))
+    df = _query(paths, cols, _where("event_type", "market_resolved"))
     if df.empty:
         return df
     return (
@@ -141,9 +157,8 @@ def load_resolutions(root: str) -> pd.DataFrame:
     )
 
 
-def message_counts(root: str, source: str) -> pd.DataFrame:
+def message_counts(paths: list[str], source: str) -> pd.DataFrame:
     """Messages per UTC hour and the largest silent gap inside each hour, in seconds."""
-    paths = _paths(root, source)
     if not paths:
         return pd.DataFrame()
     sql = f"""
@@ -151,11 +166,62 @@ def message_counts(root: str, source: str) -> pd.DataFrame:
             SELECT rx_ts, rx_ts - lag(rx_ts) OVER (ORDER BY rx_ts) AS gap
             FROM {_READ.format(paths=_sql_list(paths))}
         )
-        SELECT strftime(to_timestamp(rx_ts / 1000), '%Y-%m-%d %H') AS hour,
+        SELECT '{source}' AS source, strftime(to_timestamp(rx_ts / 1000), '%Y-%m-%d %H') AS hour,
                count(*) AS n, max(gap) / 1000.0 AS max_gap_s
-        FROM t GROUP BY 1 ORDER BY 1
+        FROM t GROUP BY 1, 2 ORDER BY 2
     """
     return duckdb.sql(sql).df()
+
+
+DERIVED_TABLES = ("windows", "feeds", "books", "resolutions", "coverage")
+
+
+def derive_day(root: str, day: str) -> dict[str, int]:
+    """Extract one UTC day of raw files into compact parquet tables under data/derived.
+
+    Idempotent: a table already derived for that day is skipped. The raw files stay as the
+    archive; everything the report needs is read from the derived layer, whose size grows
+    by a few tens of megabytes per day instead of gigabytes.
+    """
+    out: dict[str, int] = {}
+    builders = {
+        "windows": lambda: load_windows(_day_paths(root, "windows", day)),
+        "feeds": lambda: load_feeds(_day_paths(root, "rtds", day)),
+        "books": lambda: load_books(_day_paths(root, "clob", day)),
+        "resolutions": lambda: load_resolutions(_day_paths(root, "clob", day)),
+        "coverage": lambda: pd.concat(
+            [message_counts(_day_paths(root, src, day), src) for src in ("rtds", "clob")],
+            ignore_index=True,
+        ),
+    }
+    for table, build in builders.items():
+        target = os.path.join(root, "derived", table, f"{day}.parquet")
+        if os.path.exists(target):
+            continue
+        df = build()
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        df.to_parquet(target, index=False)
+        out[table] = len(df)
+    return out
+
+
+def load_derived(root: str, table: str) -> pd.DataFrame:
+    files = sorted(glob.glob(os.path.join(root, "derived", table, "*.parquet")))
+    frames = [pd.read_parquet(f) for f in files]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    if table == "windows":
+        return df.sort_values("rx_ts").drop_duplicates("slug", keep="last").reset_index(drop=True)
+    if table == "resolutions":
+        return (
+            df.sort_values("rx_ts")
+            .drop_duplicates("condition_id", keep="last")
+            .reset_index(drop=True)
+        )
+    sort_key = "hour" if table == "coverage" else "rx_ts"
+    return df.sort_values(sort_key).reset_index(drop=True)
 
 
 def compress_old_files(root: str, older_than_s: int = 7200) -> int:

@@ -41,6 +41,8 @@ def realized_vol_annualized(ts_s: np.ndarray, px: np.ndarray, min_ticks: int = 3
     """
     ts_s = np.asarray(ts_s, dtype=float)
     px = np.asarray(px, dtype=float)
+    if len(px) < min_ticks:
+        return None
     keep = np.concatenate(([True], np.diff(ts_s) > 0))
     ts_s, px = ts_s[keep], px[keep]
     if len(px) < min_ticks:

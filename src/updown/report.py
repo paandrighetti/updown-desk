@@ -104,10 +104,11 @@ def calibration(cp: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def build(settings: Settings) -> tuple[str, str]:
     root = settings.data_dir
-    windows = store.load_windows(root)
-    feeds = store.load_feeds(root)
-    books = store.load_books(root)
-    resolutions = store.load_resolutions(root)
+    windows = store.load_derived(root, "windows")
+    feeds = store.load_derived(root, "feeds")
+    books = store.load_derived(root, "books")
+    resolutions = store.load_derived(root, "resolutions")
+    coverage = store.load_derived(root, "coverage")
 
     contexts = build_contexts(windows, feeds, books, resolutions, settings.ref_feed)
     trades = grid(contexts, THRESHOLDS, LATENCIES_MS)
@@ -121,18 +122,23 @@ def build(settings: Settings) -> tuple[str, str]:
     ref_delays = [c.ref_delay_s for c in contexts if c.ref_delay_s is not None]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    coverage = (
+    headline = (
         f"Windows discovered: {n_ctx}. With outcome: {n_res}. With volatility estimate: {n_sig}. "
         f"Reference feed: `{settings.ref_feed}`."
     )
     if ref_delays:
-        coverage += (
+        headline += (
             f" Median reference-price delay after window start: {np.median(ref_delays):.2f} s."
         )
-    parts = [f"# Up/Down desk report ({generated})\n", "## Data coverage\n", coverage + "\n"]
+    parts = [f"# Up/Down desk report ({generated})\n", "## Data coverage\n", headline + "\n"]
     for src in ("rtds", "clob"):
         parts.append(f"### {src} messages per hour\n")
-        parts.append(_md(store.message_counts(root, src).tail(48), ".1f"))
+        cov = (
+            coverage[coverage["source"] == src].drop(columns=["source"])
+            if not coverage.empty
+            else coverage
+        )
+        parts.append(_md(cov.tail(48), ".1f"))
     parts += [
         "## Which feed does the resolution follow\n",
         "Share of resolved windows where sign(last - first) on the feed matches the outcome.\n",
@@ -172,11 +178,38 @@ def write(settings: Settings, report: str) -> str:
     return path
 
 
-def run_once(settings: Settings) -> str:
+def derive_pending(settings: Settings, include_today: bool = False) -> list[str]:
+    """Derive every complete UTC day not yet in data/derived. Returns the days processed."""
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    done = []
+    for day in store.raw_days(settings.data_dir):
+        if day > today or (day == today and not include_today):
+            continue
+        t0 = time.monotonic()
+        counts = store.derive_day(settings.data_dir, day)
+        if counts:
+            log.info("derived %s in %.0f s: %s", day, time.monotonic() - t0, counts)
+            done.append(day)
+    return done
+
+
+def _drop_derived_day(root: str, day: str) -> None:
+    for table in store.DERIVED_TABLES:
+        path = os.path.join(root, "derived", table, f"{day}.parquet")
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def run_once(settings: Settings, include_today: bool = False) -> str:
     n = store.compress_old_files(settings.data_dir)
     if n:
         log.info("compressed %d raw files", n)
-    report, digest = build(settings)
+    derive_pending(settings, include_today)
+    try:
+        report, digest = build(settings)
+    finally:
+        if include_today:  # a partial day must not be mistaken for a complete one tomorrow
+            _drop_derived_day(settings.data_dir, datetime.now(timezone.utc).strftime("%Y%m%d"))
     path = write(settings, report)
     log.info("wrote %s", path)
     telegram.send(settings.telegram_token, settings.telegram_chat_id, digest)
@@ -201,6 +234,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build the updown-desk report")
     parser.add_argument("--loop", action="store_true", help="run daily instead of once")
     parser.add_argument("--hour", type=int, default=6, help="UTC hour for --loop")
+    parser.add_argument(
+        "--include-today",
+        action="store_true",
+        help="also use today's partial data (one-off runs only; the daily loop never does)",
+    )
     args = parser.parse_args()
     logging.basicConfig(
         level=os.environ.get("UPDOWN_LOG_LEVEL", "INFO"),
@@ -212,7 +250,7 @@ def main() -> None:
         asyncio.run(_loop(settings, args.hour))
     else:
         t0 = time.monotonic()
-        run_once(settings)
+        run_once(settings, include_today=args.include_today)
         log.info("done in %.1f s", time.monotonic() - t0)
 
 

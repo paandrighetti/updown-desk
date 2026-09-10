@@ -53,14 +53,24 @@ collector (one process, three tasks)
                 crypto_prices_twap_thirty, crypto_prices_twap_sixty)
   writes data/raw/{clob,rtds,windows}/YYYYMMDD_HH.jsonl  as {"rx_ts": ms, "msg": wire payload}
 
-reporter (daily)
-  store.py    DuckDB over the JSONL files, gzip of files older than two hours
-  replay.py   window contexts, replay grid, checkpoints, feed agreement
+reporter (daily, 06:00 UTC)
+  store.py    derives each complete UTC day of raw files, once, into compact parquet tables
+              under data/derived/{windows,feeds,books,resolutions,coverage}; DuckDB does the
+              JSON extraction with a memory cap so the reporter cannot starve the collector
+  replay.py   window contexts, replay grid, checkpoints, feed agreement (from derived tables)
   report.py   reports/YYYY-MM-DD.md, reports/latest.md, Telegram digest
 ```
 
-Messages are written unmodified. All interpretation happens at replay time, so a bug in the
-replay never costs data, and the replay is reproducible from the files alone.
+Messages are written unmodified; the collector gzips raw files two hours after their last
+write. The raw layer is the archive (about 3 GB per day compressed, dominated by
+`price_change`), the derived layer is what the report reads (tens of megabytes per day).
+Interpretation happens at derivation and replay time, so a bug there never costs data, and
+everything is reproducible from the raw files alone. A one-off report including the current
+partial day: `updown-report --include-today`.
+
+Disk lever: `UPDOWN_DROP_EVENTS=price_change` in `.env` stops recording quote deltas (95 % of
+messages); the replay does not use them yet, the full-book reconstruction on the roadmap
+would.
 
 ## Run
 

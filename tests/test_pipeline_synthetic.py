@@ -60,7 +60,7 @@ def dataset(tmp_path):
                 },
             )
         )
-    _write(os.path.join(root, "raw", "rtds", "a.jsonl"), rtds)
+    _write(os.path.join(root, "raw", "rtds", "20260216_03.jsonl"), rtds)
 
     clob, meta = [], []
     for k in range(N_WINDOWS):
@@ -129,16 +129,20 @@ def dataset(tmp_path):
                 },
             )
         )
-    _write(os.path.join(root, "raw", "clob", "a.jsonl"), clob)
-    _write(os.path.join(root, "raw", "windows", "a.jsonl"), meta)
+    _write(os.path.join(root, "raw", "clob", "20260216_03.jsonl"), clob)
+    _write(os.path.join(root, "raw", "windows", "20260216_03.jsonl"), meta)
     return root
 
 
+def _raw(root, source):
+    return store._paths(root, source)
+
+
 def test_loaders_and_contexts(dataset):
-    windows = store.load_windows(dataset)
-    feeds = store.load_feeds(dataset)
-    books = store.load_books(dataset)
-    res = store.load_resolutions(dataset)
+    windows = store.load_windows(_raw(dataset, "windows"))
+    feeds = store.load_feeds(_raw(dataset, "rtds"))
+    books = store.load_books(_raw(dataset, "clob"))
+    res = store.load_resolutions(_raw(dataset, "clob"))
     assert len(windows) == N_WINDOWS
     assert set(feeds["topic"]) == {"crypto_prices_chainlink", "crypto_prices"}
     assert set(feeds["symbol"]) == {"btc"}
@@ -154,8 +158,14 @@ def test_loaders_and_contexts(dataset):
 
 
 def test_replay_is_causal_and_fills_within_displayed_size(dataset):
-    windows, feeds = store.load_windows(dataset), store.load_feeds(dataset)
-    books, res = store.load_books(dataset), store.load_resolutions(dataset)
+    windows, feeds = (
+        store.load_windows(_raw(dataset, "windows")),
+        store.load_feeds(_raw(dataset, "rtds")),
+    )
+    books, res = (
+        store.load_books(_raw(dataset, "clob")),
+        store.load_resolutions(_raw(dataset, "clob")),
+    )
     ctx = build_contexts(windows, feeds, books, res, "crypto_prices_chainlink")
     trades = replay(ctx, Params(threshold=0.01, latency_ms=0, max_shares=100))
     assert not trades.empty
@@ -169,8 +179,14 @@ def test_replay_is_causal_and_fills_within_displayed_size(dataset):
 
 
 def test_grid_checkpoints_agreement_and_report(dataset, tmp_path):
-    windows, feeds = store.load_windows(dataset), store.load_feeds(dataset)
-    books, res = store.load_books(dataset), store.load_resolutions(dataset)
+    assert store.raw_days(dataset) == ["20260216"]
+    counts = store.derive_day(dataset, "20260216")
+    assert set(counts) == set(store.DERIVED_TABLES)
+    assert store.derive_day(dataset, "20260216") == {}  # idempotent
+    windows, feeds = store.load_derived(dataset, "windows"), store.load_derived(dataset, "feeds")
+    books, res = store.load_derived(dataset, "books"), store.load_derived(dataset, "resolutions")
+    cov = store.load_derived(dataset, "coverage")
+    assert set(cov["source"]) == {"rtds", "clob"} and (cov["n"] > 0).all()
     ctx = build_contexts(windows, feeds, books, res, "crypto_prices_chainlink")
     g = grid(ctx, (0.01, 0.05), (0, 1000))
     summary = summarize_trades(g)
@@ -188,12 +204,13 @@ def test_grid_checkpoints_agreement_and_report(dataset, tmp_path):
     report, digest = build(settings)
     assert "## Replay grid" in report and "## Which feed" in report
     assert digest.startswith("updown-desk:")
+    assert "| hour |" in report  # coverage tables come from the derived layer
 
 
 def test_compress_old_files(dataset):
-    raw = os.path.join(dataset, "raw", "rtds", "a.jsonl")
+    raw = os.path.join(dataset, "raw", "rtds", "20260216_03.jsonl")
     old = os.path.getmtime(raw) - 10_000
     os.utime(raw, (old, old))
     assert store.compress_old_files(dataset) == 1
     assert os.path.exists(raw + ".gz") and not os.path.exists(raw)
-    assert len(store.load_feeds(dataset)) > 0  # gz read transparently
+    assert len(store.load_feeds(_raw(dataset, "rtds"))) > 0  # gz read transparently
