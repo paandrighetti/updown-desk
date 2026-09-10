@@ -201,9 +201,8 @@ def _drop_derived_day(root: str, day: str) -> None:
 
 
 def run_once(settings: Settings, include_today: bool = False) -> str:
-    n = store.compress_old_files(settings.data_dir)
-    if n:
-        log.info("compressed %d raw files", n)
+    # Raw compression belongs to the collector; two processes gzipping the same file at the
+    # same time would corrupt it.
     derive_pending(settings, include_today)
     try:
         report, digest = build(settings)
