@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "polymarket-client>=0.9",
     "websockets>=13",
+    "pyarrow>=15",
     "duckdb>=1.0",
     "pandas>=2.2",
     "numpy>=1.26",
