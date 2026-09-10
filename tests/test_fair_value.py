@@ -53,3 +53,8 @@ def test_taker_fee_matches_documented_example():
     # 100 shares at 0.50 with rate 0.25, exponent 2 -> 1.5625
     assert taker_fee(100, 0.5, 0.25, 2) == pytest.approx(1.5625)
     assert taker_fee(100, 0.01, 0.25, 2) < 0.01
+
+
+def test_realized_vol_handles_empty_and_single_inputs():
+    assert realized_vol_annualized(np.array([]), np.array([])) is None
+    assert realized_vol_annualized(np.array([1.0]), np.array([100.0])) is None
