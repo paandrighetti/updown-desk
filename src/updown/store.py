@@ -214,13 +214,29 @@ def derive_day(root: str, day: str) -> dict[str, int]:
     return out
 
 
-def load_derived(root: str, table: str) -> pd.DataFrame:
-    files = sorted(glob.glob(os.path.join(root, "derived", table, "*.parquet")))
-    frames = [pd.read_parquet(f) for f in files]
-    frames = [f for f in frames if not f.empty]
-    if not frames:
+def derived_files(root: str, table: str) -> list[str]:
+    return sorted(glob.glob(os.path.join(root, "derived", table, "*.parquet")))
+
+
+def load_derived(root: str, table: str, where: str | None = None) -> pd.DataFrame:
+    """Read a derived table through DuckDB.
+
+    Rows never pass through pandas as Python strings: the Arrow result is converted with
+    string columns as categoricals for the large tables. `where` is an optional SQL filter,
+    used to load only the reference topic of the feeds table.
+    """
+    files = derived_files(root, table)
+    if not files:
         return pd.DataFrame()
-    df = pd.concat(frames, ignore_index=True)
+    cols = "* EXCLUDE (rtds_symbol)" if table == "feeds" else "*"
+    sql = f"SELECT {cols} FROM read_parquet({files!r}, union_by_name=true)"
+    if where:
+        sql += f" WHERE {where}"
+    rel = duckdb.sql(sql)
+    table_fn = getattr(rel, "to_arrow_table", None) or rel.fetch_arrow_table
+    df = table_fn().to_pandas(strings_to_categorical=table == "feeds")
+    if df.empty:
+        return pd.DataFrame()
     if table == "windows":
         return df.sort_values("rx_ts").drop_duplicates("slug", keep="last").reset_index(drop=True)
     if table in ("resolutions", "outcomes"):
@@ -229,10 +245,6 @@ def load_derived(root: str, table: str) -> pd.DataFrame:
             .drop_duplicates("condition_id", keep="last")
             .reset_index(drop=True)
         )
-    if table == "feeds":  # string columns as categoricals: millions of rows, a handful of values
-        df = df.drop(columns=["rtds_symbol"], errors="ignore")
-        for col in ("topic", "symbol"):
-            df[col] = df[col].astype("category")
     sort_key = "hour" if table == "coverage" else "rx_ts"
     return df.sort_values(sort_key).reset_index(drop=True)
 
