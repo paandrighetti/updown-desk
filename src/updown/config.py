@@ -23,7 +23,15 @@ class Settings:
     drop_events: tuple[str, ...] = tuple(
         s.strip() for s in os.environ.get("UPDOWN_DROP_EVENTS", "").split(",") if s.strip()
     )
-    # RTDS topic used as the reference price in replay. The resolution source is Chainlink.
-    ref_feed: str = os.environ.get("UPDOWN_REF_FEED", "crypto_prices_chainlink")
+    # RTDS topic whose value at window start is the strike and whose value at window end
+    # settles the market. Measured: the 60 s Chainlink TWAP agrees with resolutions 98.8 %.
+    ref_feed: str = os.environ.get("UPDOWN_REF_FEED", "crypto_prices_twap_sixty")
+    # RTDS topic used as the diffusing state (spot) in the fair value.
+    spot_feed: str = os.environ.get("UPDOWN_SPOT_FEED", "crypto_prices_chainlink")
+    # "twap60" prices a time-weighted-average settlement; "spot" a point settlement.
+    settlement: str = os.environ.get("UPDOWN_SETTLEMENT", "twap60")
+    # Seconds without a message before a stream socket is declared dead and reopened.
+    stall_rtds_s: float = float(os.environ.get("UPDOWN_STALL_RTDS_S", "15"))
+    stall_clob_s: float = float(os.environ.get("UPDOWN_STALL_CLOB_S", "90"))
     telegram_token: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.environ.get("TELEGRAM_CHAT_ID", "")

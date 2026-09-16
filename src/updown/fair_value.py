@@ -69,3 +69,58 @@ def fee_per_share(
     if not enabled or rate is None or exponent is None:
         return 0.0
     return taker_fee(1.0, price, rate, exponent)
+
+
+def p_up_twap(
+    spot: float,
+    ref: float,
+    sigma_ann: float,
+    tau_s: float,
+    window_s: float = 60.0,
+    known_log_integral: float | None = None,
+) -> float:
+    """Probability that a time-weighted average price over the last `window_s` seconds of the
+    window ends at or above `ref`, given the current spot.
+
+    With X the log price as a driftless Brownian motion and Y the average of X over
+    [T - w, T], conditional on time t with tau = T - t:
+      tau >= w : Y - X_t ~ N(0, sigma^2 (tau - w + w/3))
+      tau <  w : Y = (K + tau X_t + noise) / w, K the realized part of the integral over
+                 [T - w, t], noise ~ N(0, sigma^2 tau^3 / 3)
+    `known_log_integral` is K (integral of log price over [T - w, t], in seconds); when the
+    caller has no ticks it is approximated by (w - tau) * log(spot). Ito drift over these
+    horizons shifts the argument by under 0.2 % and is omitted.
+    """
+    if spot <= 0 or ref <= 0:
+        raise ValueError("prices must be positive")
+    x_t, k = math.log(spot), math.log(ref)
+    var_s = sigma_ann * sigma_ann / SECONDS_PER_YEAR  # variance per second
+    if tau_s >= window_s:
+        mean = x_t
+        var = var_s * (tau_s - window_s + window_s / 3.0)
+    else:
+        tau = max(tau_s, 0.0)
+        known = known_log_integral if known_log_integral is not None else (window_s - tau) * x_t
+        mean = (known + tau * x_t) / window_s
+        var = var_s * tau**3 / (3.0 * window_s * window_s)
+    if var <= 0 or sigma_ann <= 0:
+        return 1.0 if mean >= k else 0.0
+    return norm_cdf((mean - k) / math.sqrt(var))
+
+
+def log_integral(ts_s: np.ndarray, px: np.ndarray, t0: float, t1: float) -> float | None:
+    """Integral of log(price) over [t0, t1] from irregular ticks, piecewise constant.
+
+    Returns None when no tick is at or before t0 (the level at the start is unknown).
+    """
+    ts_s = np.asarray(ts_s, dtype=float)
+    px = np.asarray(px, dtype=float)
+    if t1 <= t0 or len(px) == 0:
+        return 0.0 if t1 <= t0 else None
+    i0 = int(np.searchsorted(ts_s, t0, side="right")) - 1
+    if i0 < 0:
+        return None
+    i1 = int(np.searchsorted(ts_s, t1, side="right"))
+    times = np.concatenate(([t0], ts_s[i0 + 1 : i1], [t1]))
+    levels = np.log(px[i0:i1])
+    return float(np.sum(np.diff(times) * levels))

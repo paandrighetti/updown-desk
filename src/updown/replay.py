@@ -17,7 +17,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from .fair_value import fee_per_share, p_up, realized_vol_annualized
+from .fair_value import fee_per_share, log_integral, p_up, p_up_twap, realized_vol_annualized
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,8 @@ class WindowContext:
     outcome: int | None  # 1 = Up, 0 = Down
     outcome_source: str
     books: dict[str, pd.DataFrame] = field(default_factory=dict)  # side -> top of book rows
+    settlement: str = "twap60"
+    twap_window_s: float = 60.0
 
     def spot_at(self, t_ms: int) -> float | None:
         i = np.searchsorted(self.feed_rx, t_ms, side="right") - 1
@@ -54,7 +56,15 @@ class WindowContext:
         spot = self.spot_at(t_ms)
         if spot is None or self.ref_price is None or self.sigma is None:
             return None
-        return p_up(spot, self.ref_price, self.sigma, self.end - t_ms / 1000.0)
+        tau = self.end - t_ms / 1000.0
+        if self.settlement != "twap60":
+            return p_up(spot, self.ref_price, self.sigma, tau)
+        known = None
+        if tau < self.twap_window_s:
+            known = log_integral(
+                self.feed_rx / 1000.0, self.feed_px, self.end - self.twap_window_s, t_ms / 1000.0
+            )
+        return p_up_twap(spot, self.ref_price, self.sigma, tau, self.twap_window_s, known)
 
 
 class _FeedIndex:
@@ -100,12 +110,24 @@ def build_contexts(
     resolutions: pd.DataFrame,
     ref_feed: str,
     vol_lookback_s: int = 3600,
+    spot_feed: str | None = None,
+    settlement: str = "twap60",
 ) -> list[WindowContext]:
+    """Contexts per window. `ref_feed` gives the strike (value at start) and the settlement
+    fallback (value at end); `spot_feed` (default: same topic) is the diffusing state used
+    by the fair value and the volatility estimate."""
     out: list[WindowContext] = []
     if windows.empty or feeds.empty:
         return out
+    spot_feed = spot_feed or ref_feed
     ref = feeds[feeds["topic"] == ref_feed]
+    spot = feeds[feeds["topic"] == spot_feed]
     index = {sym: _FeedIndex(g) for sym, g in ref.groupby("symbol", observed=True)}
+    spot_index = (
+        index
+        if spot_feed == ref_feed
+        else {sym: _FeedIndex(g) for sym, g in spot.groupby("symbol", observed=True)}
+    )
     res = resolution_map(resolutions)
     books_by_token = (
         {t: g.reset_index(drop=True) for t, g in books.groupby("token")} if not books.empty else {}
@@ -114,7 +136,8 @@ def build_contexts(
 
     for w in windows.itertuples(index=False):
         f = index.get(w.symbol)
-        if f is None:
+        fs = spot_index.get(w.symbol)
+        if f is None or fs is None:
             continue
         start_ms, end_ms = w.start * 1000, w.end * 1000
         obs, px = f.by_obs(start_ms, end_ms + 60_001)
@@ -122,7 +145,7 @@ def build_contexts(
         if len(obs):
             ref_price = float(px[0])
             ref_delay = (int(obs[0]) - start_ms) / 1000.0
-        h_obs, h_px = f.by_obs(start_ms - lookback_ms, start_ms)
+        h_obs, h_px = fs.by_obs(start_ms - lookback_ms, start_ms)
         sigma = realized_vol_annualized(h_obs / 1000.0, h_px)
 
         outcome, source = None, "none"
@@ -137,7 +160,7 @@ def build_contexts(
                 outcome = int(float(e_px[-1]) >= ref_price)
                 source = f"feed:{ref_feed}"
 
-        rx, rx_px = f.by_rx(start_ms - lookback_ms, end_ms + 1)
+        rx, rx_px = fs.by_rx(start_ms - lookback_ms, end_ms + 1)
         out.append(
             WindowContext(
                 symbol=w.symbol,
@@ -159,6 +182,7 @@ def build_contexts(
                     "up": books_by_token.get(w.up_token, pd.DataFrame()),
                     "down": books_by_token.get(w.down_token, pd.DataFrame()),
                 },
+                settlement=settlement,
             )
         )
     return out

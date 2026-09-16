@@ -58,3 +58,38 @@ def test_taker_fee_matches_documented_example():
 def test_realized_vol_handles_empty_and_single_inputs():
     assert realized_vol_annualized(np.array([]), np.array([])) is None
     assert realized_vol_annualized(np.array([1.0]), np.array([100.0])) is None
+
+
+def test_twap_reduces_to_shorter_horizon_far_from_expiry():
+    from updown.fair_value import p_up_twap
+
+    # far from expiry the average over the last 60 s has less variance than the spot at expiry
+    spot_like = p_up(100.3, 100.0, 0.6, 600)
+    twap = p_up_twap(100.3, 100.0, 0.6, 600, window_s=60.0)
+    assert twap > spot_like > 0.5
+
+
+def test_twap_uses_realized_part_near_expiry():
+    from updown.fair_value import p_up_twap
+
+    # 20 s left, 40 s of the window already realized well above the strike
+    k = 40 * math.log(101.0)
+    high = p_up_twap(100.0, 100.0, 0.6, 20, window_s=60.0, known_log_integral=k)
+    low = p_up_twap(100.0, 100.0, 0.6, 20, window_s=60.0, known_log_integral=40 * math.log(99.0))
+    assert high > 0.99 and low < 0.01
+    # at expiry the answer is the sign of the realized average
+    assert (
+        p_up_twap(100.0, 100.0, 0.6, 0, window_s=60.0, known_log_integral=60 * math.log(100.5))
+        == 1.0
+    )
+
+
+def test_log_integral_piecewise_constant():
+    from updown.fair_value import log_integral
+
+    ts = np.array([0.0, 10.0, 20.0])
+    px = np.array([100.0, 200.0, 400.0])
+    # over [5, 25]: 5 s at 100, 10 s at 200, 5 s at 400
+    expected = 5 * math.log(100) + 10 * math.log(200) + 5 * math.log(400)
+    assert log_integral(ts, px, 5.0, 25.0) == pytest.approx(expected)
+    assert log_integral(ts, px, -1.0, 5.0) is None  # no level known at the start

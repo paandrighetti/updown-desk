@@ -105,7 +105,9 @@ def calibration(cp: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 def build(settings: Settings) -> tuple[str, str]:
     root = settings.data_dir
     windows = store.load_derived(root, "windows")
-    feeds = store.load_derived(root, "feeds", where=f"topic = '{settings.ref_feed}'")
+    feeds = store.load_derived(
+        root, "feeds", where=f"topic IN ('{settings.ref_feed}', '{settings.spot_feed}')"
+    )
     books = store.load_derived(root, "books")
     resolutions = pd.concat(
         [store.load_derived(root, "resolutions"), store.load_derived(root, "outcomes")],
@@ -113,7 +115,15 @@ def build(settings: Settings) -> tuple[str, str]:
     )
     coverage = store.load_derived(root, "coverage")
 
-    contexts = build_contexts(windows, feeds, books, resolutions, settings.ref_feed)
+    contexts = build_contexts(
+        windows,
+        feeds,
+        books,
+        resolutions,
+        settings.ref_feed,
+        spot_feed=settings.spot_feed,
+        settlement=settings.settlement,
+    )
     trades = grid(contexts, THRESHOLDS, LATENCIES_MS)
     summary = summarize_trades(trades)
     agreement = feed_agreement(windows, store.derived_files(root, "feeds"), resolutions)
@@ -128,7 +138,8 @@ def build(settings: Settings) -> tuple[str, str]:
 
     headline = (
         f"Windows discovered: {n_ctx}. With outcome: {n_res}. With volatility estimate: {n_sig}. "
-        f"Reference feed: `{settings.ref_feed}`. Outcome sources: {sources}."
+        f"Strike and settlement feed: `{settings.ref_feed}`; state feed: `{settings.spot_feed}`; "
+        f"settlement model: `{settings.settlement}`. Outcome sources: {sources}."
     )
     if ref_delays:
         headline += (
@@ -252,6 +263,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stdout,
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings()
     if args.loop:
         asyncio.run(_loop(settings, args.hour))
