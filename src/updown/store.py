@@ -223,12 +223,16 @@ def load_derived(root: str, table: str) -> pd.DataFrame:
     df = pd.concat(frames, ignore_index=True)
     if table == "windows":
         return df.sort_values("rx_ts").drop_duplicates("slug", keep="last").reset_index(drop=True)
-    if table == "resolutions":
+    if table in ("resolutions", "outcomes"):
         return (
             df.sort_values("rx_ts")
             .drop_duplicates("condition_id", keep="last")
             .reset_index(drop=True)
         )
+    if table == "feeds":  # string columns as categoricals: millions of rows, a handful of values
+        df = df.drop(columns=["rtds_symbol"], errors="ignore")
+        for col in ("topic", "symbol"):
+            df[col] = df[col].astype("category")
     sort_key = "hour" if table == "coverage" else "rx_ts"
     return df.sort_values(sort_key).reset_index(drop=True)
 
