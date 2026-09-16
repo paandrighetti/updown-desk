@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import glob
 import gzip
-import json
 import os
 import shutil
 import time
@@ -113,36 +112,41 @@ def load_feeds(paths: list[str]) -> pd.DataFrame:
 
 
 def load_books(paths: list[str]) -> pd.DataFrame:
-    """Top of book from full 'book' snapshots: best bid/ask price and size per token."""
-    cols = ", ".join(
-        ["rx_ts", _col("asset_id", "token"), _col("bids", "bids"), _col("asks", "asks")]
-    )
-    df = _query(paths, cols, _where("event_type", "book"))
-    if df.empty:
-        return df
+    """Top of book from full 'book' snapshots, computed inside DuckDB.
 
-    def top(levels: str | None, best):
-        if not levels:
-            return (None, None)
-        rows = json.loads(levels)
-        if not rows:
-            return (None, None)
-        lvl = best(rows, key=lambda r: float(r["price"]))
-        return (float(lvl["price"]), float(lvl["size"]))
-
-    bids = df["bids"].map(lambda s: top(s, max))
-    asks = df["asks"].map(lambda s: top(s, min))
-    out = pd.DataFrame(
-        {
-            "rx_ts": df["rx_ts"],
-            "token": df["token"],
-            "bid": [b[0] for b in bids],
-            "bid_size": [b[1] for b in bids],
-            "ask": [a[0] for a in asks],
-            "ask_size": [a[1] for a in asks],
-        }
-    )
-    return out.sort_values("rx_ts").reset_index(drop=True)
+    Snapshot arrays never reach pandas: a day of snapshots as Python strings is gigabytes,
+    which is what used to get the reporter killed on a 4 GB host.
+    """
+    if not paths:
+        return pd.DataFrame()
+    levels = '[{"price":"VARCHAR","size":"VARCHAR"}]'
+    sql = f"""
+        WITH b AS (
+            SELECT rx_ts, json_extract_string(msg,'$.asset_id') AS token,
+                   from_json(json_extract(msg,'$.bids'), '{levels}') AS bids,
+                   from_json(json_extract(msg,'$.asks'), '{levels}') AS asks
+            FROM {_READ.format(paths=_sql_list(paths))}
+            WHERE json_extract_string(msg,'$.event_type') = 'book'
+        ), t AS (
+            SELECT rx_ts, token,
+                   list_transform(bids, x -> struct_pack(price := CAST(x.price AS DOUBLE),
+                                                         size := CAST(x.size AS DOUBLE))) AS bids,
+                   list_transform(asks, x -> struct_pack(price := CAST(x.price AS DOUBLE),
+                                                         size := CAST(x.size AS DOUBLE))) AS asks
+            FROM b
+        ), m AS (
+            SELECT rx_ts, token, bids, asks,
+                   list_aggregate(list_transform(bids, x -> x.price), 'max') AS bid,
+                   list_aggregate(list_transform(asks, x -> x.price), 'min') AS ask
+            FROM t
+        )
+        SELECT rx_ts, token, bid,
+               list_filter(bids, x -> x.price = bid)[1].size AS bid_size,
+               ask,
+               list_filter(asks, x -> x.price = ask)[1].size AS ask_size
+        FROM m ORDER BY rx_ts
+    """
+    return duckdb.sql(sql).df()
 
 
 def load_resolutions(paths: list[str]) -> pd.DataFrame:
@@ -190,7 +194,12 @@ def derive_day(root: str, day: str) -> dict[str, int]:
         "books": lambda: load_books(_day_paths(root, "clob", day)),
         "resolutions": lambda: load_resolutions(_day_paths(root, "clob", day)),
         "coverage": lambda: pd.concat(
-            [message_counts(_day_paths(root, src, day), src) for src in ("rtds", "clob")],
+            [
+                message_counts([f], src)
+                for src in ("rtds", "clob")
+                for f in _day_paths(root, src, day)
+            ]
+            or [pd.DataFrame()],
             ignore_index=True,
         ),
     }
