@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import duckdb
 import numpy as np
 import pandas as pd
 
@@ -163,19 +164,24 @@ def build_contexts(
     return out
 
 
-def _fill(book: pd.DataFrame, i: int, t_ms: int, latency_ms: int, limit: float, max_shares: float):
+def _fill(
+    rx: np.ndarray,
+    ask: np.ndarray,
+    size: np.ndarray,
+    i: int,
+    t_ms: int,
+    latency_ms: int,
+    limit: float,
+    max_shares: float,
+):
     """First snapshot received at or after t + latency; fill only if its ask is within the limit."""
-    j = (
-        int(np.searchsorted(book["rx_ts"].to_numpy(), t_ms + latency_ms, side="left"))
-        if latency_ms
-        else i
-    )
-    if j >= len(book):
+    j = int(np.searchsorted(rx, t_ms + latency_ms, side="left")) if latency_ms else i
+    if j >= len(rx):
         return None
-    row = book.iloc[j]
-    if pd.isna(row["ask"]) or row["ask"] > limit or not row["ask_size"] or row["ask_size"] <= 0:
+    a, sz = ask[j], size[j]
+    if np.isnan(a) or a > limit or np.isnan(sz) or sz <= 0:
         return None
-    return int(row["rx_ts"]), float(row["ask"]), float(min(max_shares, row["ask_size"]))
+    return int(rx[j]), float(a), float(min(max_shares, sz))
 
 
 def replay(contexts: list[WindowContext], params: Params) -> pd.DataFrame:
@@ -187,24 +193,25 @@ def replay(contexts: list[WindowContext], params: Params) -> pd.DataFrame:
             book = c.books[side]
             if book.empty:
                 continue
-            arr_ts = book["rx_ts"].to_numpy()
-            lo = int(np.searchsorted(arr_ts, c.start * 1000, side="left"))
-            hi = int(np.searchsorted(arr_ts, c.end * 1000, side="right"))
+            rx = book["rx_ts"].to_numpy(dtype=np.int64)
+            ask = book["ask"].to_numpy(dtype=float)
+            size = book["ask_size"].to_numpy(dtype=float)
+            lo = int(np.searchsorted(rx, c.start * 1000, side="left"))
+            hi = int(np.searchsorted(rx, c.end * 1000, side="right"))
             for i in range(lo, hi):
-                row = book.iloc[i]
-                if pd.isna(row["ask"]) or not row["ask_size"]:
+                if np.isnan(ask[i]) or np.isnan(size[i]) or size[i] <= 0:
                     continue
-                t = int(row["rx_ts"])
+                t = int(rx[i])
                 fu = c.fair_up(t)
                 if fu is None:
                     continue
                 fair = fu if side == "up" else 1.0 - fu
-                ask = float(row["ask"])
-                fee_ps = fee_per_share(ask, c.fee_rate, c.fee_exponent, c.fees_enabled)
-                edge = fair - ask - fee_ps
+                a = float(ask[i])
+                fee_ps = fee_per_share(a, c.fee_rate, c.fee_exponent, c.fees_enabled)
+                edge = fair - a - fee_ps
                 if edge < params.threshold:
                     continue
-                filled = _fill(book, i, t, params.latency_ms, ask, params.max_shares)
+                filled = _fill(rx, ask, size, i, t, params.latency_ms, a, params.max_shares)
                 if filled is None:
                     break  # one attempt per side per window
                 t_fill, price, shares = filled
@@ -281,36 +288,65 @@ def checkpoints(contexts: list[WindowContext], offsets_s=(300, 600, 840)) -> pd.
 
 
 def feed_agreement(
-    windows: pd.DataFrame, feeds: pd.DataFrame, resolutions: pd.DataFrame
+    windows: pd.DataFrame, feeds: pd.DataFrame | list[str], resolutions: pd.DataFrame
 ) -> pd.DataFrame:
-    """For each RTDS topic: how often sign(end - start) matches the resolved outcome.
+    """For each RTDS topic: how often sign(last - first) matches the resolved outcome.
 
     This is the empirical answer to "which feed does the resolution actually follow".
+    `feeds` is either an in-memory frame or the list of derived parquet files; only the
+    first and last tick of each (window, topic) pair leave DuckDB.
     """
-    if windows.empty or feeds.empty or resolutions.empty:
+    if windows.empty or resolutions.empty:
+        return pd.DataFrame()
+    if isinstance(feeds, pd.DataFrame):
+        if feeds.empty:
+            return pd.DataFrame()
+        source = "feeds_df"
+        feeds_df = feeds  # noqa: F841 - referenced by name in the DuckDB query below
+    else:
+        if not feeds:
+            return pd.DataFrame()
+        source = f"read_parquet({feeds!r}, union_by_name=true)"
+    win = windows[["condition_id", "symbol", "start", "end"]]  # noqa: F841 - same
+    endpoints = duckdb.sql(
+        f"""
+        SELECT w.condition_id, f.topic,
+               arg_min(f.px, f.obs_ts) AS first_px, arg_max(f.px, f.obs_ts) AS last_px,
+               count(*) AS n
+        FROM win w
+        JOIN {source} f
+          ON f.symbol = w.symbol
+         AND f.obs_ts >= w.start * 1000 AND f.obs_ts <= w."end" * 1000
+        GROUP BY 1, 2
+        """
+    ).df()
+    if endpoints.empty:
         return pd.DataFrame()
     res = resolution_map(resolutions)
-    index = {
-        (sym, topic): _FeedIndex(g)
-        for (sym, topic), g in feeds.groupby(["symbol", "topic"], observed=True)
-    }
+    tokens = dict(
+        zip(
+            windows["condition_id"],
+            zip(windows["up_token"], windows["down_token"], strict=True),
+            strict=True,
+        )
+    )
     rows = []
-    for w in windows.itertuples(index=False):
-        win_tok, _src = res.get(w.condition_id, (None, None))
-        if win_tok not in (w.up_token, w.down_token):
+    for e in endpoints.itertuples(index=False):
+        if e.n < 2:
             continue
-        outcome = int(win_tok == w.up_token)
-        for (sym, topic), f in index.items():
-            if sym != w.symbol:
-                continue
-            obs, px = f.by_obs(w.start * 1000, w.end * 1000 + 1)
-            if len(obs) < 2:
-                continue
-            pred = int(float(px[-1]) >= float(px[0]))
-            rows.append(
-                {"topic": topic, "symbol": w.symbol, "start": w.start, "agree": pred == outcome}
-            )
+        win_tok, _src = res.get(e.condition_id, (None, None))
+        up, down = tokens[e.condition_id]
+        if win_tok not in (up, down):
+            continue
+        pred = int(float(e.last_px) >= float(e.first_px))
+        rows.append({"topic": e.topic, "agree": pred == int(win_tok == up)})
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    return df.groupby("topic")["agree"].agg(n="count", agreement="mean").reset_index()
+    return (
+        df.groupby("topic")["agree"]
+        .agg(n="count", agreement="mean")
+        .reset_index()
+        .sort_values("topic")
+        .reset_index(drop=True)
+    )

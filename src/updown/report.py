@@ -105,7 +105,7 @@ def calibration(cp: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 def build(settings: Settings) -> tuple[str, str]:
     root = settings.data_dir
     windows = store.load_derived(root, "windows")
-    feeds = store.load_derived(root, "feeds")
+    feeds = store.load_derived(root, "feeds", where=f"topic = '{settings.ref_feed}'")
     books = store.load_derived(root, "books")
     resolutions = pd.concat(
         [store.load_derived(root, "resolutions"), store.load_derived(root, "outcomes")],
@@ -116,7 +116,7 @@ def build(settings: Settings) -> tuple[str, str]:
     contexts = build_contexts(windows, feeds, books, resolutions, settings.ref_feed)
     trades = grid(contexts, THRESHOLDS, LATENCIES_MS)
     summary = summarize_trades(trades)
-    agreement = feed_agreement(windows, feeds, resolutions)
+    agreement = feed_agreement(windows, store.derived_files(root, "feeds"), resolutions)
     brier, cal = calibration(checkpoints(contexts))
 
     n_ctx = len(contexts)
