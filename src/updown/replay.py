@@ -56,6 +56,42 @@ class WindowContext:
         return p_up(spot, self.ref_price, self.sigma, self.end - t_ms / 1000.0)
 
 
+class _FeedIndex:
+    """One symbol's reference ticks as sorted numpy arrays, for cheap window slicing."""
+
+    def __init__(self, g: pd.DataFrame) -> None:
+        g = g.sort_values("obs_ts")
+        self.obs = g["obs_ts"].to_numpy(dtype=np.int64)
+        self.px = g["px"].to_numpy(dtype=float)
+        rx = g[["rx_ts", "px"]].sort_values("rx_ts")
+        self.rx = rx["rx_ts"].to_numpy(dtype=np.int64)
+        self.rx_px = rx["px"].to_numpy(dtype=float)
+
+    def by_obs(self, lo: int, hi: int) -> tuple[np.ndarray, np.ndarray]:
+        i, j = np.searchsorted(self.obs, [lo, hi], side="left")
+        return self.obs[i:j], self.px[i:j]
+
+    def by_rx(self, lo: int, hi: int) -> tuple[np.ndarray, np.ndarray]:
+        i, j = np.searchsorted(self.rx, [lo, hi], side="left")
+        return self.rx[i:j], self.rx_px[i:j]
+
+
+def resolution_map(resolutions: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    """condition_id -> (winning_token, source). Stream events win over a Gamma sweep."""
+    if resolutions.empty:
+        return {}
+    df = resolutions.copy()
+    if "source" not in df:
+        df["source"] = "market_resolved"
+    df["source"] = df["source"].fillna("market_resolved")  # stream rows carry no source column
+    df["rank"] = (df["source"] != "market_resolved").astype(int)
+    df = df.sort_values(["rank", "rx_ts"]).drop_duplicates("condition_id", keep="first")
+    return {
+        c: (t, src)
+        for c, t, src in zip(df["condition_id"], df["winning_token"], df["source"], strict=True)
+    }
+
+
 def build_contexts(
     windows: pd.DataFrame,
     feeds: pd.DataFrame,
@@ -68,40 +104,39 @@ def build_contexts(
     if windows.empty or feeds.empty:
         return out
     ref = feeds[feeds["topic"] == ref_feed]
-    res = (
-        {}
-        if resolutions.empty
-        else dict(zip(resolutions["condition_id"], resolutions["winning_token"], strict=True))
-    )
+    index = {sym: _FeedIndex(g) for sym, g in ref.groupby("symbol", observed=True)}
+    res = resolution_map(resolutions)
     books_by_token = (
         {t: g.reset_index(drop=True) for t, g in books.groupby("token")} if not books.empty else {}
     )
+    lookback_ms = vol_lookback_s * 1000
 
     for w in windows.itertuples(index=False):
-        f = ref[ref["symbol"] == w.symbol]
+        f = index.get(w.symbol)
+        if f is None:
+            continue
         start_ms, end_ms = w.start * 1000, w.end * 1000
-        in_win = f[(f["obs_ts"] >= start_ms) & (f["obs_ts"] <= end_ms + 60_000)]
+        obs, px = f.by_obs(start_ms, end_ms + 60_001)
         ref_price = ref_delay = None
-        if not in_win.empty:
-            first = in_win.iloc[0]
-            ref_price = float(first["px"])
-            ref_delay = (first["obs_ts"] - start_ms) / 1000.0
-        hist = f[(f["obs_ts"] >= start_ms - vol_lookback_s * 1000) & (f["obs_ts"] < start_ms)]
-        sigma = realized_vol_annualized(hist["obs_ts"].to_numpy() / 1000.0, hist["px"].to_numpy())
+        if len(obs):
+            ref_price = float(px[0])
+            ref_delay = (int(obs[0]) - start_ms) / 1000.0
+        h_obs, h_px = f.by_obs(start_ms - lookback_ms, start_ms)
+        sigma = realized_vol_annualized(h_obs / 1000.0, h_px)
 
         outcome, source = None, "none"
-        win_tok = res.get(w.condition_id)
+        win_tok, src = res.get(w.condition_id, (None, None))
         if win_tok == w.up_token:
-            outcome, source = 1, "market_resolved"
+            outcome, source = 1, src
         elif win_tok == w.down_token:
-            outcome, source = 0, "market_resolved"
+            outcome, source = 0, src
         elif ref_price is not None:
-            at_end = f[(f["obs_ts"] <= end_ms) & (f["obs_ts"] >= start_ms)]
-            if not at_end.empty and (end_ms - at_end.iloc[-1]["obs_ts"]) <= 5_000:
-                outcome = int(float(at_end.iloc[-1]["px"]) >= ref_price)
+            e_obs, e_px = f.by_obs(start_ms, end_ms + 1)
+            if len(e_obs) and (end_ms - int(e_obs[-1])) <= 5_000:
+                outcome = int(float(e_px[-1]) >= ref_price)
                 source = f"feed:{ref_feed}"
 
-        live = f[(f["rx_ts"] >= start_ms - vol_lookback_s * 1000) & (f["rx_ts"] <= end_ms)]
+        rx, rx_px = f.by_rx(start_ms - lookback_ms, end_ms + 1)
         out.append(
             WindowContext(
                 symbol=w.symbol,
@@ -112,8 +147,8 @@ def build_contexts(
                 fee_rate=None if pd.isna(w.fee_rate) else float(w.fee_rate),
                 fee_exponent=None if pd.isna(w.fee_exponent) else float(w.fee_exponent),
                 fees_enabled=None if pd.isna(w.fees_enabled) else bool(w.fees_enabled),
-                feed_rx=live["rx_ts"].to_numpy(dtype=np.int64),
-                feed_px=live["px"].to_numpy(dtype=float),
+                feed_rx=rx,
+                feed_px=rx_px,
                 ref_price=ref_price,
                 ref_delay_s=ref_delay,
                 sigma=sigma,
@@ -254,18 +289,24 @@ def feed_agreement(
     """
     if windows.empty or feeds.empty or resolutions.empty:
         return pd.DataFrame()
-    res = dict(zip(resolutions["condition_id"], resolutions["winning_token"], strict=True))
+    res = resolution_map(resolutions)
+    index = {
+        (sym, topic): _FeedIndex(g)
+        for (sym, topic), g in feeds.groupby(["symbol", "topic"], observed=True)
+    }
     rows = []
     for w in windows.itertuples(index=False):
-        win_tok = res.get(w.condition_id)
+        win_tok, _src = res.get(w.condition_id, (None, None))
         if win_tok not in (w.up_token, w.down_token):
             continue
         outcome = int(win_tok == w.up_token)
-        for topic, f in feeds[feeds["symbol"] == w.symbol].groupby("topic"):
-            s = f[(f["obs_ts"] >= w.start * 1000) & (f["obs_ts"] <= w.end * 1000)]
-            if len(s) < 2:
+        for (sym, topic), f in index.items():
+            if sym != w.symbol:
                 continue
-            pred = int(float(s.iloc[-1]["px"]) >= float(s.iloc[0]["px"]))
+            obs, px = f.by_obs(w.start * 1000, w.end * 1000 + 1)
+            if len(obs) < 2:
+                continue
+            pred = int(float(px[-1]) >= float(px[0]))
             rows.append(
                 {"topic": topic, "symbol": w.symbol, "start": w.start, "agree": pred == outcome}
             )

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
-from . import store, telegram
+from . import resolve, store, telegram
 from .config import Settings
 from .replay import build_contexts, checkpoints, feed_agreement, grid
 
@@ -107,7 +107,10 @@ def build(settings: Settings) -> tuple[str, str]:
     windows = store.load_derived(root, "windows")
     feeds = store.load_derived(root, "feeds")
     books = store.load_derived(root, "books")
-    resolutions = store.load_derived(root, "resolutions")
+    resolutions = pd.concat(
+        [store.load_derived(root, "resolutions"), store.load_derived(root, "outcomes")],
+        ignore_index=True,
+    )
     coverage = store.load_derived(root, "coverage")
 
     contexts = build_contexts(windows, feeds, books, resolutions, settings.ref_feed)
@@ -118,13 +121,14 @@ def build(settings: Settings) -> tuple[str, str]:
 
     n_ctx = len(contexts)
     n_res = sum(c.outcome is not None for c in contexts)
+    sources = pd.Series([c.outcome_source for c in contexts]).value_counts().to_dict()
     n_sig = sum(c.sigma is not None for c in contexts)
     ref_delays = [c.ref_delay_s for c in contexts if c.ref_delay_s is not None]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     headline = (
         f"Windows discovered: {n_ctx}. With outcome: {n_res}. With volatility estimate: {n_sig}. "
-        f"Reference feed: `{settings.ref_feed}`."
+        f"Reference feed: `{settings.ref_feed}`. Outcome sources: {sources}."
     )
     if ref_delays:
         headline += (
@@ -204,6 +208,10 @@ def run_once(settings: Settings, include_today: bool = False) -> str:
     # Raw compression belongs to the collector; two processes gzipping the same file at the
     # same time would corrupt it.
     derive_pending(settings, include_today)
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    resolve.sweep_pending(
+        settings.data_dir, [d for d in store.raw_days(settings.data_dir) if d < today]
+    )
     try:
         report, digest = build(settings)
     finally:

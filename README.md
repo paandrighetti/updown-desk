@@ -57,6 +57,7 @@ reporter (daily, 06:00 UTC)
   store.py    derives each complete UTC day of raw files, once, into compact parquet tables
               under data/derived/{windows,feeds,books,resolutions,coverage}; DuckDB does the
               JSON extraction with a memory cap so the reporter cannot starve the collector
+  resolve.py  Gamma sweep: settled outcome for every window the stream did not resolve
   replay.py   window contexts, replay grid, checkpoints, feed agreement (from derived tables)
   report.py   reports/YYYY-MM-DD.md, reports/latest.md, Telegram digest
 ```

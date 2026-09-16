@@ -5,6 +5,7 @@ import math
 import os
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from updown import store
@@ -214,3 +215,72 @@ def test_compress_old_files(dataset):
     assert store.compress_old_files(dataset) == 1
     assert os.path.exists(raw + ".gz") and not os.path.exists(raw)
     assert len(store.load_feeds(_raw(dataset, "rtds"))) > 0  # gz read transparently
+
+
+def test_resolution_map_prefers_stream_over_gamma():
+    from updown.replay import resolution_map
+
+    res = pd.DataFrame(
+        [
+            {"rx_ts": 5, "condition_id": "c1", "winning_token": "gamma_says", "source": "gamma"},
+            {"rx_ts": 1, "condition_id": "c1", "winning_token": "stream_says"},
+            {"rx_ts": 2, "condition_id": "c2", "winning_token": "only_gamma", "source": "gamma"},
+        ]
+    )
+    m = resolution_map(res)
+    assert m["c1"] == ("stream_says", "market_resolved")
+    assert m["c2"] == ("only_gamma", "gamma")
+
+
+def test_gamma_sweep_fills_missing_outcomes(dataset, monkeypatch):
+    import asyncio
+
+    from updown import resolve
+
+    store.derive_day(dataset, "20260216")
+    os.remove(os.path.join(dataset, "derived", "resolutions", "20260216.parquet"))
+
+    class Price:
+        def __init__(self, p):
+            self.price = p
+
+    class Outcomes:
+        def __init__(self, p):
+            self.yes = Price(p)
+
+    class Market:
+        def __init__(self, p):
+            self.outcomes = Outcomes(p)
+
+    class Event:
+        def __init__(self, p):
+            self.markets = [Market(p)]
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def get_event(self, slug):
+            k = int(slug.rsplit("-", 1)[1]) - T0
+            return Event("1" if (k // 900) % 2 == 0 else "0")
+
+    monkeypatch.setattr(resolve, "AsyncPublicClient", Client)
+    n = asyncio.run(resolve.sweep_day(dataset, "20260216", pace_s=0.0))
+    assert n == N_WINDOWS
+    out = store.load_derived(dataset, "outcomes")
+    assert (out["source"] == "gamma").all() and len(out) == N_WINDOWS
+    assert asyncio.run(resolve.sweep_day(dataset, "20260216", pace_s=0.0)) == 0
+    # the report merges both sources and labels the gamma-filled windows
+    windows = store.load_derived(dataset, "windows")
+    res = pd.concat([store.load_derived(dataset, "resolutions"), out], ignore_index=True)
+    ctx = build_contexts(
+        windows,
+        store.load_derived(dataset, "feeds"),
+        store.load_derived(dataset, "books"),
+        res,
+        "crypto_prices_chainlink",
+    )
+    assert all(c.outcome_source == "gamma" for c in ctx)
