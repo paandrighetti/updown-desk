@@ -30,7 +30,7 @@ CLOB_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS = "wss://ws-live-data.polymarket.com"
 # Both streams deliver several messages per second. Silence beyond this is a dead socket that
 # TCP has not noticed yet; the watchdog closes it and the reconnect loop takes over.
-STALL_S = {"rtds": 60.0, "clob": 90.0}
+STALL_S = {"rtds": Settings().stall_rtds_s, "clob": Settings().stall_clob_s}
 
 log = logging.getLogger("updown.collector")
 

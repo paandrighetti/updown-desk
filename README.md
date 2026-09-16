@@ -20,19 +20,40 @@ not exist in this repository.
 3. **Is the model better calibrated than the market mid?** Brier scores at fixed checkpoints
    inside the window (5, 10 and 14 minutes) and a decile calibration table.
 
+## First results (six days, 2 548 resolved windows, September 2026)
+
+- Resolution follows the 60-second Chainlink TWAP: sign(last - first) over the window
+  agrees with the settled outcome 98.8 % of the time on `crypto_prices_twap_sixty`, against
+  96.0 % for the 30 s TWAP, 92.3 % for the Chainlink spot relay and 91.8 % for Binance.
+- The spot-settled fair value is worse than the market at every checkpoint (Brier 0.132
+  against 0.097 at 14 minutes) and overconfident in the extreme deciles.
+- Taking the market against that fair value loses in all twelve cells of the grid, t-stat
+  between -2.4 and -3.4, hit rate 45 to 50 %, fees explaining about half the loss. No edge;
+  the market is better informed than the model, and the model was pricing the wrong
+  contract. This is the result the project was built to be able to state.
+
 ## Fair value
 
-Driftless geometric Brownian motion over the remaining life of the window, with `S_ref` the
-first reference-feed observation at or after the window start and `sigma` the realized
-variance estimator on the trailing hour of feed ticks (`sum(r^2) / sum(dt)`, annualized):
+Two settlement models, selected by `UPDOWN_SETTLEMENT`.
+
+`spot`: driftless geometric Brownian motion, `S_ref` the reference feed at window start,
+`sigma` the realized variance estimator on the trailing hour of ticks:
 
 ```
 P(S_T >= S_ref | S_t) = Phi( ln(S_t / S_ref) / s - s / 2 ),   s = sigma * sqrt(tau)
 ```
 
-The `s / 2` term is the Ito correction; at the money the fair value is slightly below 0.5.
-Zero drift is a modeling choice: over 15 minutes the drift term is negligible next to the
-diffusion term. Ties resolve Up, as in the market rules.
+`twap60` (default since the measurement above): the contract settles on the average price
+over the last 60 s of the window. With X the log price, Y its average over [T - w, T]:
+
+```
+tau >= w : Y - X_t ~ N(0, sigma^2 (tau - w + w/3))
+tau <  w : Y = (K + tau X_t + e) / w,   e ~ N(0, sigma^2 tau^3 / 3)
+```
+
+where K is the realized integral of the log price over [T - w, t], computed from ticks. The
+strike is the TWAP feed value at window start. Near expiry this contract has far less
+remaining variance than a spot-settled one, which is where the spot model failed most.
 
 ## Cost model
 
@@ -99,8 +120,9 @@ max drawdown, fees); Brier scores and calibration deciles for model versus marke
 
 ## Known limitations
 
-- The Chainlink data stream used for resolution is not the RTDS Chainlink relay; the
-  relay is a proxy and question 1 above quantifies how good a proxy it is.
+- The settlement feed is the RTDS relay of the Chainlink TWAP, not the data stream
+  itself; the 1.2 % residual disagreement is the size of that gap plus window-boundary
+  effects.
 - Volatility is estimated once per window from the trailing hour and not updated inside
   the window.
 - Only full `book` snapshots are used for the top of book in replay; `price_change` deltas
