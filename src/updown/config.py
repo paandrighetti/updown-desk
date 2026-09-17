@@ -30,6 +30,8 @@ class Settings:
     spot_feed: str = os.environ.get("UPDOWN_SPOT_FEED", "crypto_prices_chainlink")
     # "twap60" prices a time-weighted-average settlement; "spot" a point settlement.
     settlement: str = os.environ.get("UPDOWN_SETTLEMENT", "twap60")
+    # The daily report replays the last N complete days; memory stays bounded as data grows.
+    report_days: int = int(os.environ.get("UPDOWN_REPORT_DAYS", "7"))
     # Seconds without a message before a stream socket is declared dead and reopened.
     stall_rtds_s: float = float(os.environ.get("UPDOWN_STALL_RTDS_S", "15"))
     stall_clob_s: float = float(os.environ.get("UPDOWN_STALL_CLOB_S", "90"))

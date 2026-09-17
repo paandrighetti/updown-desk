@@ -20,7 +20,7 @@ from .windows import base_symbol
 _READ = "read_json({paths}, columns={{'rx_ts':'BIGINT','msg':'JSON'}}, format='newline_delimited')"
 
 # Keep DuckDB well under the host's RAM so the reporter can never starve the collector.
-duckdb.execute(f"SET memory_limit='{os.environ.get('UPDOWN_DUCKDB_MEM', '1500MB')}'")
+duckdb.execute(f"SET memory_limit='{os.environ.get('UPDOWN_DUCKDB_MEM', '1200MB')}'")
 duckdb.execute("SET temp_directory='/tmp/duckdb_spill'")
 
 
@@ -214,18 +214,22 @@ def derive_day(root: str, day: str) -> dict[str, int]:
     return out
 
 
-def derived_files(root: str, table: str) -> list[str]:
-    return sorted(glob.glob(os.path.join(root, "derived", table, "*.parquet")))
+def derived_files(root: str, table: str, days: int | None = None) -> list[str]:
+    """Derived parquet files of a table, optionally only the last `days` day-files."""
+    files = sorted(glob.glob(os.path.join(root, "derived", table, "*.parquet")))
+    return files[-days:] if days else files
 
 
-def load_derived(root: str, table: str, where: str | None = None) -> pd.DataFrame:
+def load_derived(
+    root: str, table: str, where: str | None = None, days: int | None = None
+) -> pd.DataFrame:
     """Read a derived table through DuckDB.
 
     Rows never pass through pandas as Python strings: the Arrow result is converted with
     string columns as categoricals for the large tables. `where` is an optional SQL filter,
     used to load only the reference topic of the feeds table.
     """
-    files = derived_files(root, table)
+    files = derived_files(root, table, days)
     if not files:
         return pd.DataFrame()
     cols = "* EXCLUDE (rtds_symbol)" if table == "feeds" else "*"

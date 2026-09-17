@@ -104,16 +104,23 @@ def calibration(cp: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def build(settings: Settings) -> tuple[str, str]:
     root = settings.data_dir
-    windows = store.load_derived(root, "windows")
+    days = settings.report_days
+    windows = store.load_derived(root, "windows", days=days)
     feeds = store.load_derived(
-        root, "feeds", where=f"topic IN ('{settings.ref_feed}', '{settings.spot_feed}')"
+        root,
+        "feeds",
+        where=f"topic IN ('{settings.ref_feed}', '{settings.spot_feed}')",
+        days=days,
     )
-    books = store.load_derived(root, "books")
+    books = store.load_derived(root, "books", days=days)
     resolutions = pd.concat(
-        [store.load_derived(root, "resolutions"), store.load_derived(root, "outcomes")],
+        [
+            store.load_derived(root, "resolutions", days=days + 1),
+            store.load_derived(root, "outcomes", days=days + 1),
+        ],
         ignore_index=True,
     )
-    coverage = store.load_derived(root, "coverage")
+    coverage = store.load_derived(root, "coverage", days=2)
 
     contexts = build_contexts(
         windows,
@@ -126,7 +133,7 @@ def build(settings: Settings) -> tuple[str, str]:
     )
     trades = grid(contexts, THRESHOLDS, LATENCIES_MS)
     summary = summarize_trades(trades)
-    agreement = feed_agreement(windows, store.derived_files(root, "feeds"), resolutions)
+    agreement = feed_agreement(windows, store.derived_files(root, "feeds", days=days), resolutions)
     brier, cal = calibration(checkpoints(contexts))
 
     n_ctx = len(contexts)
@@ -145,7 +152,11 @@ def build(settings: Settings) -> tuple[str, str]:
         headline += (
             f" Median reference-price delay after window start: {np.median(ref_delays):.2f} s."
         )
-    parts = [f"# Up/Down desk report ({generated})\n", "## Data coverage\n", headline + "\n"]
+    parts = [
+        f"# Up/Down desk report ({generated}, last {days} complete days)\n",
+        "## Data coverage\n",
+        headline + "\n",
+    ]
     for src in ("rtds", "clob"):
         parts.append(f"### {src} messages per hour\n")
         cov = (
@@ -243,7 +254,8 @@ async def _loop(settings: Settings, hour: int) -> None:
         log.info("next report at %s", nxt.isoformat())
         await asyncio.sleep((nxt - now).total_seconds())
         try:
-            run_once(settings)
+            # run_once drives its own event loops (Gamma sweep); it must not run inside this one
+            await asyncio.to_thread(run_once, settings)
         except Exception:  # keep the daemon alive, report next day
             log.exception("report failed")
 

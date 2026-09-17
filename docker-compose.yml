@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
     env_file: .env
     command: ["updown-report", "--loop", "--hour", "6"]
-    mem_limit: 2500m
+    mem_limit: 3000m
     volumes:
       - ./data:/data
       - ./reports:/reports
