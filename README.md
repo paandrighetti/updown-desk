@@ -63,6 +63,46 @@ received after the configured latency still shows an ask at or below that price;
 capped by the displayed size and 100 shares. One attempt per side per window, held to
 resolution. This is deliberately pessimistic; a real desk would post and manage inventory.
 
+## Passive quoting replay (pre-registered 21 September 2026)
+
+The taker result closes one question: the market is not mispriced against a diffusion fair
+value, so there is nothing to take. The passive replay asks the question a liquidity
+provider would ask instead: is the flow that hits resting quotes in these windows benign
+enough to earn the spread plus the maker rebate, and how does that depend on time to expiry?
+No orders are placed; the replay runs on the same recording, using the trade tape
+(`last_trade_price` events) that the taker replay did not need.
+
+Strategy: two-sided quotes on the Up token at `anchor +/- half_spread`, anchor either the
+market mid or the model fair value, shifted against inventory by a linear skew (the discrete
+analogue of the reservation price in Avellaneda and Stoikov, 2008), 20 shares a side,
+inventory capped at 100 shares and held to resolution. Quotes are rounded to the tick and kept
+one tick inside the opposite best, so a quote never takes.
+
+Fill model, every choice of which can only under-count fills: quotes computed at a book
+snapshot go live `latency_ms` after its receive time and stay live until the next snapshot's
+quotes go live, so a stale quote can be picked off during the latency. A bid is filled by
+taker SELL prints at or below it, an ask by taker BUY prints at or above it, on the same token.
+A quote that improves the displayed best is first in line; one that joins or sits behind it
+waits for the displayed best size to print at or through its price first. Matches through
+the Down token (mint and merge against Down orders) are not observed and are ignored.
+Maker rebate: 20 % of the taker fee on the fill (Polymarket's published crypto rate at the
+time of writing; a parameter, and the report shows PnL with and without it).
+
+Hypotheses written before the first run, with the statistic that decides each one:
+
+- H1. Quoting around the market mid, outside the last 120 s, earns a positive PnL per
+  window before rebates. Decided by the sign and t-statistic of window PnL in the cell
+  `mid, 0.01, 250 ms, tau_min 120` over at least 14 complete days.
+- H2. The flow hitting passive quotes in the last 120 s is informed: the 30 s markout of
+  fills in the `[0, 120)` time-to-expiry buckets is negative and below the markout of the
+  `[300, 900)` buckets. Decided by the markout table of the base cell.
+- H3. Anchoring quotes on the model fair value does not beat anchoring on the mid, since
+  the market is better calibrated than the model. Decided by comparing the two anchors cell
+  by cell at equal half spread, latency and `tau_min`.
+- Abandon criterion: if after 14 complete days every cell has a 30 s markout below minus
+  one half spread and a negative PnL before rebates, passive quoting on these windows is
+  declared unprofitable at 250 ms latency and the project moves on.
+
 ## Architecture
 
 ```
@@ -76,10 +116,12 @@ collector (one process, three tasks)
 
 reporter (daily, 06:00 UTC)
   store.py    derives each complete UTC day of raw files, once, into compact parquet tables
-              under data/derived/{windows,feeds,books,resolutions,coverage}; DuckDB does the
-              JSON extraction with a memory cap so the reporter cannot starve the collector
+              under data/derived/{windows,feeds,books,trades,resolutions,coverage}; DuckDB
+              does the JSON extraction with a memory cap so the reporter cannot starve the
+              collector
   resolve.py  Gamma sweep: settled outcome for every window the stream did not resolve
-  replay.py   window contexts, replay grid, checkpoints, feed agreement (from derived tables)
+  replay.py   window contexts, taker replay grid, checkpoints, feed agreement
+  passive.py  passive quoting replay against the trade tape, markouts by time to expiry
   report.py   reports/YYYY-MM-DD.md, reports/latest.md, Telegram digest
 ```
 
@@ -115,8 +157,11 @@ pytest -q
 ## What the daily report contains
 
 Message counts and the largest silent gap per hour and per source; the feed agreement
-table; the replay grid (n, hit rate, PnL, PnL per trade, t-stat, return on deployed capital,
-max drawdown, fees); Brier scores and calibration deciles for model versus market mid.
+table; the taker replay grid (n, hit rate, PnL, PnL per trade, t-stat, return on deployed
+capital, max drawdown, fees); the passive quoting grid (windows, shares traded per window,
+PnL before and after rebates, t-stat of window PnL, max drawdown, 30 s and resolution
+markouts) and the markout table of the base cell by time-to-expiry bucket; Brier scores and
+calibration deciles for model versus market mid.
 
 ## Known limitations
 
@@ -128,12 +173,15 @@ max drawdown, fees); Brier scores and calibration deciles for model versus marke
 - Only full `book` snapshots are used for the top of book in replay; `price_change` deltas
   are recorded but not yet applied, so the replay sees the book at snapshot cadence only.
 - Receive timestamps are local; clock offset to the exchange is not measured.
+- The passive replay sees only the displayed best level: the size resting at a deeper
+  level is unknown and the displayed best size stands in for it. Fills that would have
+  arrived through the Down token are not counted. A print without a size on the wire
+  counts as zero volume; the report states the share of prints carrying a size.
 - Order placement on Polymarket is geographically restricted. This project reads public
   market data only.
 
 ## Roadmap
 
-1. Apply `price_change` deltas to maintain the full book between snapshots.
-2. Replace the taker replay by a passive quoting replay with inventory (Avellaneda and
-   Stoikov, 2008) using the same recording.
-3. Add Kalshi market data for the same assets and measure cross-venue divergence.
+1. Apply `price_change` deltas to maintain the full book between snapshots, which would
+   replace the displayed-best proxy in the passive queue rule.
+2. Add Kalshi market data for the same assets and measure cross-venue divergence.

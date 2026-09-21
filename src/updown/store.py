@@ -149,6 +149,40 @@ def load_books(paths: list[str]) -> pd.DataFrame:
     return duckdb.sql(sql).df()
 
 
+def load_trades(paths: list[str]) -> pd.DataFrame:
+    """Prints from `last_trade_price` events: token, price, size, taker side, receive time.
+
+    `side` is the taker's side for that token (BUY lifted an ask, SELL hit a bid). `size`
+    is optional on the wire; a missing size is kept as NaN and counts as zero volume in
+    the passive replay, which can only under-count fills.
+    """
+    cols = ", ".join(
+        [
+            "rx_ts",
+            _col("asset_id", "token"),
+            _col("price", "price", "DOUBLE"),
+            _col("size", "size", "DOUBLE"),
+            _col("side", "side"),
+            _col("timestamp", "ts", "BIGINT"),
+        ]
+    )
+    if not paths:  # a day without CLOB files still gets a typed, readable parquet
+        return pd.DataFrame(
+            {
+                "rx_ts": pd.Series(dtype="int64"),
+                "token": pd.Series(dtype="object"),
+                "price": pd.Series(dtype="float64"),
+                "size": pd.Series(dtype="float64"),
+                "side": pd.Series(dtype="object"),
+                "ts": pd.Series(dtype="int64"),
+            }
+        )
+    df = _query(paths, cols, _where("event_type", "last_trade_price"))
+    if df.empty:
+        return df
+    return df.sort_values("rx_ts").reset_index(drop=True)
+
+
 def load_resolutions(paths: list[str]) -> pd.DataFrame:
     cols = ", ".join(
         ["rx_ts", _col("market", "condition_id"), _col("winning_asset_id", "winning_token")]
@@ -177,7 +211,7 @@ def message_counts(paths: list[str], source: str) -> pd.DataFrame:
     return duckdb.sql(sql).df()
 
 
-DERIVED_TABLES = ("windows", "feeds", "books", "resolutions", "coverage")
+DERIVED_TABLES = ("windows", "feeds", "books", "trades", "resolutions", "coverage")
 
 
 def derive_day(root: str, day: str) -> dict[str, int]:
@@ -192,6 +226,7 @@ def derive_day(root: str, day: str) -> dict[str, int]:
         "windows": lambda: load_windows(_day_paths(root, "windows", day)),
         "feeds": lambda: load_feeds(_day_paths(root, "rtds", day)),
         "books": lambda: load_books(_day_paths(root, "clob", day)),
+        "trades": lambda: load_trades(_day_paths(root, "clob", day)),
         "resolutions": lambda: load_resolutions(_day_paths(root, "clob", day)),
         "coverage": lambda: pd.concat(
             [

@@ -47,6 +47,7 @@ class WindowContext:
     books: dict[str, pd.DataFrame] = field(default_factory=dict)  # side -> top of book rows
     settlement: str = "twap60"
     twap_window_s: float = 60.0
+    tick_size: float = 0.01
 
     def spot_at(self, t_ms: int) -> float | None:
         i = np.searchsorted(self.feed_rx, t_ms, side="right") - 1
@@ -101,6 +102,10 @@ def resolution_map(resolutions: pd.DataFrame) -> dict[str, tuple[str, str]]:
         c: (t, src)
         for c, t, src in zip(df["condition_id"], df["winning_token"], df["source"], strict=True)
     }
+
+
+def _tick_size(value) -> float:
+    return 0.01 if value is None or pd.isna(value) or float(value) <= 0 else float(value)
 
 
 def build_contexts(
@@ -183,6 +188,7 @@ def build_contexts(
                     "down": books_by_token.get(w.down_token, pd.DataFrame()),
                 },
                 settlement=settlement,
+                tick_size=_tick_size(getattr(w, "tick_size", None)),
             )
         )
     return out
