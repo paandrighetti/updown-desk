@@ -1,0 +1,92 @@
+ Container updown-desk-reporter-run-797be6c2c6b8 Creating 
+ Container updown-desk-reporter-run-797be6c2c6b8 Created 
+data /data, last 7 derived days, prior-snapshot latency 250 ms
+
+== 0. raw CLOB event mix, 20260909_12.jsonl.gz
+      event_type       n
+    price_change 1659687
+            book   11458
+last_trade_price    5605
+tick_size_change      44
+
+== 0. raw CLOB event mix, 20260922_12.jsonl.gz
+      event_type       n
+    price_change 2783266
+            book   11980
+last_trade_price    5971
+tick_size_change      48
+
+== 0b. one best_bid_ask message as recorded, 20260922_12.jsonl.gz
+Empty DataFrame
+Columns: [msg]
+Index: []
+
+== 1. side of last_trade_price against the prior mid (prior = at least 250 ms older)
+Taker convention: BUY mostly above_mid and SELL mostly below_mid. The reverse means `side` is the maker's side and the v0.2 fill rule is inverted.
+side  prints  above_mid  at_mid  below_mid
+ BUY  669909      0.790   0.045      0.166
+SELL   79490      0.169   0.042      0.789
+
+== 2. prints and book snapshots per window, inside the window
+     kind  leg      n  per_window
+   prints down 353657       133.2
+   prints   up 406689       153.2
+snapshots down 778023       292.6
+snapshots   up 778023       292.6
+
+== 2b. lag from the latest print on the same market to each book snapshot
+within_250ms near 1: snapshots arrive only after trades. Chance level with one print every few seconds is around 0.1.
+ leg  snapshots  within_250ms  within_1s  median_lag_ms
+down     778023         0.341      0.593          599.0
+  up     778023         0.339      0.592          605.0
+
+== 3. Up prints: age of the snapshot the replay quoted from, and where the print sat
+through_prior_best: the print is beyond the best price of the snapshot the replay quoted from, so the market moved while the replay quote did not.
+ up_prints  median_age_s  p75_age_s  p90_age_s  at_prior_best  through_prior_best  inside_prior_best
+    401035           1.0       2.89       7.69          0.468               0.301              0.232
+
+== 4. RTDS cadence and relay delay, last derived day
+median_delay_ms: receive time minus the source timestamp (NTP clocks, a few ms of error). A taker reading the exchange directly sees each move about this much earlier.
+                    topic symbol  ticks  median_gap_ms  p90_gap_ms  share_new_price  median_delay_ms
+            crypto_prices    bnb  85793         1000.0      1060.0            0.567            367.0
+            crypto_prices    btc  85793         1000.0      1062.0            0.582            381.0
+            crypto_prices   doge  85800         1000.0      1062.0            0.541            433.0
+            crypto_prices    eth  85796          999.0      1061.0            0.639            376.0
+            crypto_prices    sol  85799         1000.0      1063.0            0.530            453.0
+            crypto_prices    xrp  85781         1000.0      1063.0            0.609            382.0
+  crypto_prices_chainlink    bnb  84651         1050.0      1377.0            0.891           1362.0
+  crypto_prices_chainlink    btc  84621         1049.0      1379.0            0.994           1382.0
+  crypto_prices_chainlink   doge  84631         1048.0      1378.0            0.982           1362.0
+  crypto_prices_chainlink    eth  84634         1048.0      1376.7            0.997           1372.0
+  crypto_prices_chainlink   hype  84627         1050.0      1379.0            0.971           1365.0
+  crypto_prices_chainlink    sol  84648         1049.0      1377.0            0.998           1369.0
+  crypto_prices_chainlink    xrp  84659         1049.0      1377.0            0.998           1372.0
+  crypto_prices_chainlink    zec  84639         1048.0      1377.0            0.996           1358.0
+ crypto_prices_twap_sixty    bnb  84633         1039.0      1396.0            0.856           1441.0
+ crypto_prices_twap_sixty    btc  84647         1039.0      1394.0            0.855           1444.0
+ crypto_prices_twap_sixty   doge  84648         1041.0      1394.0            0.855           1446.0
+ crypto_prices_twap_sixty    eth  84642         1041.0      1394.0            0.853           1441.0
+ crypto_prices_twap_sixty   hype  84656         1039.0      1396.0            0.856           1449.0
+ crypto_prices_twap_sixty    sol  84634         1042.0      1395.0            0.855           1442.0
+ crypto_prices_twap_sixty    xrp  84641         1040.0      1394.0            0.855           1446.0
+ crypto_prices_twap_sixty    zec  84625         1040.0      1396.0            0.857           1450.0
+crypto_prices_twap_thirty    bnb  84653         1040.0      1391.0            0.855           1427.0
+crypto_prices_twap_thirty    btc  84651         1041.0      1392.0            0.855           1445.0
+crypto_prices_twap_thirty   doge  84644         1041.0      1393.0            0.855           1425.0
+crypto_prices_twap_thirty    eth  84654         1040.0      1393.0            0.854           1431.0
+crypto_prices_twap_thirty   hype  84647         1041.0      1392.0            0.854           1427.0
+crypto_prices_twap_thirty    sol  84652         1039.0      1393.0            0.854           1432.0
+crypto_prices_twap_thirty    xrp  84665         1040.0      1392.0            0.855           1430.0
+crypto_prices_twap_thirty    zec  84654         1040.0      1392.0            0.855           1423.0
+
+== 5. H2: markout of passive fills by time to expiry, latest report
+### Markout of passive fills by time to expiry (base cell: mid anchor, half spread 0.01, latency 250 ms)
+
+| tau_bucket | n_fills | shares | mo_10s | mo_30s | mo_60s | mo_res |
+|---|---|---|---|---|---|---|
+| [0, 60) | 2255 | 21208.8810 | -0.0462 | -0.0712 | -0.1148 | -0.0382 |
+| [60, 120) | 4301 | 45579.3397 | -0.0339 | -0.0286 | -0.0397 | -0.0242 |
+| [120, 300) | 8461 | 92195.5079 | -0.0256 | -0.0249 | -0.0290 | -0.0292 |
+| [300, 600) | 9231 | 96686.1456 | -0.0248 | -0.0248 | -0.0234 | -0.0183 |
+| [600, 900) | 10439 | 106455.6270 | -0.0239 | -0.0254 | -0.0267 | -0.0307 |
+

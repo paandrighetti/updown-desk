@@ -10,7 +10,7 @@ from updown import passive, store
 from updown.config import Settings
 from updown.passive import Cell, _Window, markout_by_tau, replay
 from updown.replay import build_contexts
-from updown.report import build, summarize_passive
+from updown.report import build
 
 START, END = 1_771_210_800, 1_771_211_700
 FEE = (0.25, 2.0, True)
@@ -137,7 +137,7 @@ def test_inventory_cap_skew_and_tau_min():
     assert replay([_window(late, lp)], Cell("mid", 0.01, 250, tau_min_s=120.0))[0].empty
 
 
-def test_markout_table_and_summary():
+def test_markout_table():
     w = _window(
         [(T, 0.49, 0.51, 10, 10), (T + 20_000, 0.44, 0.46, 10, 10)],
         [(T + 300, 0.49, 50, "SELL")],
@@ -148,13 +148,10 @@ def test_markout_table_and_summary():
     assert len(tbl) == 1 and tbl.iloc[0]["n_fills"] == 1
     assert tbl.iloc[0]["mo_30s"] == pytest.approx(0.45 - 0.49)
     assert tbl.iloc[0]["mo_res"] == pytest.approx(-0.49)
-    s = summarize_passive(res, fills)
-    assert len(s) == 1 and s.iloc[0]["n_win"] == 1
-    assert s.iloc[0]["pnl_ex_rebate"] == pytest.approx(-9.8)
-    assert s.iloc[0]["mo_res"] == pytest.approx(-0.49)
+    assert res.iloc[0]["pnl_ex_rebate"] == pytest.approx(-9.8)
 
 
-# --- synthetic pipeline: trades derived from raw CLOB files and the report section ---
+# --- synthetic pipeline: trades derived from raw CLOB files; the report no longer runs it ---
 
 
 def _write(path, rows):
@@ -245,7 +242,7 @@ def dataset(tmp_path):
     return root
 
 
-def test_trades_are_derived_and_report_has_passive_section(dataset, tmp_path):
+def test_trades_are_derived_and_report_has_no_passive_section(dataset, tmp_path):
     counts = store.derive_day(dataset, "20260216")
     assert counts["trades"] == len(range(START, END, 5))
     trades = store.load_derived(dataset, "trades")
@@ -266,8 +263,8 @@ def test_trades_are_derived_and_report_has_passive_section(dataset, tmp_path):
 
     settings = Settings(data_dir=dataset, reports_dir=str(tmp_path / "reports"))
     report, digest = build(settings)
-    assert "## Passive quoting replay" in report and "passive best" in digest
-    assert "| tau_bucket |" in report
+    # v0.2 is invalidated as an economic test (docs/passive-quoting.md): not in the daily report
+    assert "Passive quoting" not in report and "passive" not in digest
 
 
 def test_missing_size_counts_as_zero_volume():

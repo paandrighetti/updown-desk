@@ -1,0 +1,54 @@
+ Container updown-desk-reporter-run-dd095c8df237 Creating 
+ Container updown-desk-reporter-run-dd095c8df237 Created 
+
+== 1. disk
+filesystem holding /data: total 74.8 GB, used 58.8 GB, free 12.9 GB (79% used)
+  raw/clob       45.48 GB
+  raw/rtds        0.76 GB
+  raw/windows     0.00 GB
+  derived         0.44 GB
+  raw CLOB per day (the last day is in progress, its recent hours uncompressed):
+    20260909    1.56 GB
+    20260910    2.92 GB
+    20260911    2.91 GB
+    20260912    2.14 GB
+    20260913    2.26 GB
+    20260914    3.12 GB
+    20260915    3.29 GB
+    20260916    3.24 GB
+    20260917    3.26 GB
+    20260918    3.93 GB
+    20260919    2.57 GB
+    20260920    3.05 GB
+    20260921    3.80 GB
+    20260922    7.41 GB
+  UPDOWN_DROP_EVENTS in .env: 'price_change'
+
+== 2. receive time minus exchange timestamp, 20260922_12.jsonl.gz
+      event_type       n  with_ts  p10_ms  median_ms  p90_ms
+    price_change 2783266  2783266    15.0       17.0    28.0
+            book   11980    11980    16.0       18.0    34.0
+last_trade_price    5971     5971    16.0       17.0    30.0
+tick_size_change      48       48    16.0       17.0    18.0
+
+== 3. each print against the book message of the same token with the nearest exchange timestamp
+If within_50ms is high and median_rx_gap_ms is several hundred ms, the print of a trade is received well after the book of the same trade.
+ prints  same_ts  within_50ms  median_book_minus_print_ts  print_received_after_book  median_rx_gap_ms  p90_rx_gap_ms
+   5971    0.013        0.937                       -38.0                      0.895              36.0           45.0
+
+== 4. mirror check, 20260921.parquet: Up and Down snapshots received within 50 ms of each other
+Both shares near 1: one book seen from both sides.
+ pairs  up_bid_is_1_minus_down_ask  up_ask_is_1_minus_down_bid
+121813                       0.999                       0.999
+
+== 5. one recorded price_change message, first 1500 characters
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         msg
+{"market":"0xfbe4e0c7542679e58f2c5e1512363388e4c3f926889858cf554178d2374ce19d","price_changes":[{"asset_id":"55586204486099811126749642632308268470653772841565131824648926574555980174856","price":"0.01","size":"20","side":"BUY","hash":"ebb8857d89e3a7b41ca76f0da7639ce03e937504","best_bid":"0.999","best_ask":"1"},{"asset_id":"67079779543059066682565359657413481219663993833121060737405123154134630393729","price":"0.99","size":"20","side":"SELL","hash":"d932e3749480632d186f6fa4fb36ad7393790c85","best_bid":"0","best_ask":"0.001"}],"timestamp":"1790078399999","event_type":"price_change"}
+
+== 5. one recorded book message, first 700 characters
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         msg
+{"market":"0x775283a9496cf8db99fa9aae277d53ebebe86ed2551804e24ab55d06420ac405","asset_id":"93387677851371296463830787272494437702844074510815240786292644297229388485004","bids":[{"price":"0.01","size":"3968"},{"price":"0.02","size":"1348.68"},{"price":"0.03","size":"502.65"},{"price":"0.04","size":"203"},{"price":"0.05","size":"1379.55"},{"price":"0.06","size":"50"},{"price":"0.07","size":"654.14"},{"price":"0.08","size":"155"},{"price":"0.09","size":"120.33"},{"price":"0.1","size":"77"},{"price":"0.11","size":"283"},{"price":"0.12","size":"53.34"},{"price":"0.13","size":"52.7"},{"price":"0.14","size":"64.15"},{"price":"0.15","size":"51.67"},{"price":"0.16","size":"51.25"},{"price":"0.17","s
+
+== 5. one recorded last_trade_price message, first 700 characters
+                                                                                                                                                                                                                                                                                                                                                                                     msg
+{"market":"0x775283a9496cf8db99fa9aae277d53ebebe86ed2551804e24ab55d06420ac405","asset_id":"93387677851371296463830787272494437702844074510815240786292644297229388485004","price":"0.52","size":"9","fee_rate_bps":"0","side":"BUY","timestamp":"1790078402449","event_type":"last_trade_price","transaction_hash":"0xec6cd494d2def120e99072ab326cf45bd26d0286fad6cdc9bb066a1a4f9ea571"}

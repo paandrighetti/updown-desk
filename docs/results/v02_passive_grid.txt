@@ -1,0 +1,45 @@
+root@ubuntu-4gb-nbg1-3:/opt/updown-desk# docker logs -f updown-backfill
+2026-09-22 17:50:30,478 INFO updown.report derived 20260909 in 23 s: {'trades': 68194}
+2026-09-22 17:51:14,428 INFO updown.report derived 20260910 in 44 s: {'trades': 146859}
+2026-09-22 17:51:57,111 INFO updown.report derived 20260911 in 43 s: {'trades': 149827}
+2026-09-22 17:52:28,448 INFO updown.report derived 20260912 in 31 s: {'trades': 136422}
+2026-09-22 17:53:01,128 INFO updown.report derived 20260913 in 33 s: {'trades': 102690}
+2026-09-22 17:53:46,921 INFO updown.report derived 20260914 in 46 s: {'trades': 121207}
+2026-09-22 17:54:34,344 INFO updown.report derived 20260915 in 47 s: {'trades': 118115}
+2026-09-22 17:55:22,250 INFO updown.report derived 20260916 in 48 s: {'trades': 98234}
+2026-09-22 17:56:10,608 INFO updown.report derived 20260917 in 48 s: {'trades': 101835}
+2026-09-22 17:57:06,824 INFO updown.report derived 20260918 in 56 s: {'trades': 134946}
+2026-09-22 17:57:45,139 INFO updown.report derived 20260919 in 38 s: {'trades': 102672}
+2026-09-22 17:58:29,843 INFO updown.report derived 20260920 in 45 s: {'trades': 112770}
+2026-09-22 17:59:22,857 INFO updown.report derived 20260921 in 53 s: {'trades': 122843}
+2026-09-22 18:02:12,590 INFO updown.report passive grid: 16 cells in 135 s
+2026-09-22 18:02:12,662 INFO updown.report wrote /reports/2026-09-22.md
+2026-09-22 18:02:12,835 INFO updown.report done in 725.8 s
+root@ubuntu-4gb-nbg1-3:/opt/updown-desk# grep -n -A 25 "Passive quoting replay" reports/latest.md
+143:## Passive quoting replay: two-sided quotes on the Up token, inventory held to resolution
+144-
+145-Quotes are anchor +/- half_spread with linear inventory skew, 20 shares a side, inventory capped at 100, live from snapshot receive time + `latency_ms` until the next snapshot's quotes go live. A bid is filled by taker SELL prints at or below it, an ask by taker BUY prints at or above it, after the displayed size at the joined level has printed. Fills through the Down token are not observed. Maker rebate: 20% of the taker fee on the fill. `tau_min_s` stops quoting inside the last N seconds. Prints in the tape: 791415, share carrying a size: 100.0%. Markouts are share-weighted per-share moves of the mid against the fill (negative = adverse).
+146-
+147-| anchor | half_spread | latency_ms | tau_min_s | n_win | shares_per_win | pnl_ex_rebate | rebates | pnl | pnl_per_win | t_stat | max_drawdown | mo_30s | mo_res |
+148-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+149-| model | 0.0200 | 1000 | 120.0000 | 2647 | 103.8196 | -9404.1937 | 706.8888 | -8697.3048 | -3.2857 | -5.4314 | -9333.6278 | -0.0393 | -0.0342 |
+150-| mid | 0.0100 | 250 | 120.0000 | 2647 | 112.5722 | -7838.2362 | 776.0135 | -7062.2227 | -2.6680 | -5.0083 | -7591.8535 | -0.0252 | -0.0263 |
+151-| model | 0.0100 | 250 | 0.0000 | 2647 | 142.0473 | -11152.8899 | 937.7833 | -10215.1066 | -3.8591 | -5.6124 | -10551.2877 | -0.0328 | -0.0297 |
+152-| model | 0.0100 | 1000 | 0.0000 | 2647 | 131.4300 | -12611.5833 | 854.9835 | -11756.5998 | -4.4415 | -6.5924 | -12064.8363 | -0.0404 | -0.0363 |
+153-| model | 0.0100 | 250 | 120.0000 | 2647 | 122.9672 | -9583.1750 | 849.1894 | -8733.9856 | -3.2996 | -4.9253 | -9348.0152 | -0.0321 | -0.0294 |
+154-| mid | 0.0100 | 1000 | 0.0000 | 2647 | 130.3014 | -12081.0350 | 852.7595 | -11228.2756 | -4.2419 | -7.1735 | -11727.2914 | -0.0349 | -0.0350 |
+155-| mid | 0.0200 | 250 | 120.0000 | 2647 | 69.1401 | -4745.2675 | 475.2603 | -4270.0072 | -1.6131 | -4.4833 | -4656.7213 | -0.0259 | -0.0259 |
+156-| model | 0.0100 | 1000 | 120.0000 | 2647 | 113.4640 | -10422.5238 | 774.7171 | -9647.8067 | -3.6448 | -5.6059 | -10309.8723 | -0.0386 | -0.0347 |
+157-| mid | 0.0200 | 1000 | 120.0000 | 2647 | 74.1078 | -6990.5358 | 509.4699 | -6481.0659 | -2.4485 | -5.9920 | -6808.5779 | -0.0354 | -0.0356 |
+158-| model | 0.0200 | 1000 | 0.0000 | 2647 | 122.1256 | -11636.7729 | 788.9420 | -10847.8308 | -4.0982 | -6.5009 | -11142.1850 | -0.0414 | -0.0360 |
+159-| mid | 0.0200 | 1000 | 0.0000 | 2647 | 95.9795 | -9638.3302 | 619.3522 | -9018.9780 | -3.4072 | -7.2917 | -9383.9629 | -0.0379 | -0.0379 |
+160-| model | 0.0200 | 250 | 0.0000 | 2647 | 132.5257 | -10469.9731 | 869.0600 | -9600.9130 | -3.6271 | -5.6302 | -9958.9709 | -0.0334 | -0.0298 |
+161-| mid | 0.0100 | 1000 | 120.0000 | 2647 | 108.0540 | -9522.4207 | 738.3942 | -8784.0266 | -3.3185 | -6.0437 | -9250.4877 | -0.0332 | -0.0333 |
+162-| mid | 0.0100 | 250 | 0.0000 | 2647 | 136.8060 | -9644.0026 | 901.6813 | -8742.3213 | -3.3027 | -5.7081 | -9246.9523 | -0.0262 | -0.0266 |
+163-| mid | 0.0200 | 250 | 0.0000 | 2647 | 91.6473 | -6815.4265 | 590.2977 | -6225.1288 | -2.3518 | -5.5390 | -6588.4746 | -0.0286 | -0.0281 |
+164-| model | 0.0200 | 250 | 120.0000 | 2647 | 112.9438 | -8738.4446 | 778.1643 | -7960.2803 | -3.0073 | -4.8248 | -8593.3538 | -0.0326 | -0.0292 |
+165-
+166-### Markout of passive fills by time to expiry (base cell: mid anchor, half spread 0.01, latency 250 ms)
+167-
+168-| tau_bucket | n_fills | shares | mo_10s | mo_30s | mo_60s | mo_res |
+root@ubuntu-4gb-nbg1-3:/opt/updown-desk# 

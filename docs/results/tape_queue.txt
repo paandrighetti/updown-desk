@@ -1,0 +1,24 @@
+ Container updown-desk-reporter-run-025117c6b391 Creating 
+ Container updown-desk-reporter-run-025117c6b391 Created 
+== 1. fee schedule of the windows, which drives the rebate estimate
+ fees_on  fee_rate  fee_exp  windows
+    True      0.07      1.0     5244
+
+== 2. pocket 0.1 <= |p - 0.5| < 0.3: share of shares by queue class
+      sample  days   last_day  front_or_middle  back  no_own_snapshot
+ exploration     6 2026-09-15            0.572 0.389            0.039
+confirmation     7 2026-09-22            0.562 0.388            0.051
+
+== 3. pocket, cents per share, all prints and by queue class (t cluster-robust)
+      sample          prints  shares  rs_5s  rs_30s  t_rs_30s  rs_60s  rebate   stat  t_stat  rs_res
+ exploration             all 7800427 -0.105   0.053      0.41   0.178   0.294  0.347    2.71   0.600
+ exploration front_or_middle 4460992  0.330   0.360      2.48   0.521   0.294  0.654    4.50   0.537
+ exploration            back 3038207 -0.812  -0.555     -2.85  -0.525   0.293 -0.262   -1.35   0.312
+confirmation             all 7007755  0.018   0.063      0.64   0.046   0.291  0.354    3.60   0.077
+confirmation front_or_middle 3937616  0.236   0.245      2.10   0.183   0.290  0.535    4.59  -0.304
+confirmation            back 2715812 -0.471  -0.347     -2.35  -0.344   0.291 -0.056   -0.38  -0.040
+stat = rs_30s + rebate; rebate = 20 % of the fee schedule's taker fee, an estimate.
+
+== 4. pre-registered decisions
+tape study, pocket on the samples as they stand: qualifies = True
+back of the queue: fails the rule; the follower simulation is not built

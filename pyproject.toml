@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "updown-desk"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lossless recorder and fair-value replay desk for Polymarket 15-minute crypto Up/Down markets"
 requires-python = ">=3.11"
 dependencies = [

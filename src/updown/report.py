@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
-from . import passive, resolve, store, telegram
+from . import resolve, store, telegram
 from .config import Settings
 from .replay import build_contexts, checkpoints, feed_agreement, grid
 
@@ -21,16 +21,6 @@ log = logging.getLogger("updown.report")
 
 THRESHOLDS = (0.01, 0.02, 0.05)
 LATENCIES_MS = (0, 250, 1000, 3000)
-# Passive quoting grid, pre-registered 2026-09-21 (see README). The base cell is the one
-# whose fills feed the markout-by-time-to-expiry table.
-PASSIVE_BASE = passive.Cell(anchor="mid", half_spread=0.01, latency_ms=250, tau_min_s=0.0)
-PASSIVE_CELLS = tuple(
-    passive.Cell(anchor=a, half_spread=h, latency_ms=lat, tau_min_s=tm)
-    for a in ("mid", "model")
-    for h in (0.01, 0.02)
-    for lat in (250, 1000)
-    for tm in (0.0, 120.0)
-)
 
 
 def _md(df: pd.DataFrame, floatfmt: str = ".4f") -> str:
@@ -74,39 +64,6 @@ def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
                 "fees": float(g["fee"].sum()),
             }
         )
-    return pd.DataFrame(rows)
-
-
-def summarize_passive(windows: pd.DataFrame, fills: pd.DataFrame) -> pd.DataFrame:
-    """One row per passive cell: window-level PnL statistics plus fill-level markouts."""
-    if windows.empty:
-        return pd.DataFrame()
-    rows = []
-    for key, g in windows.sort_values("start").groupby(list(passive.CELL_KEYS), sort=False):
-        pnl = g["pnl"].to_numpy()
-        std = float(pnl.std(ddof=1)) if len(pnl) > 1 else float("nan")
-        f = passive.select(fills, passive.Cell(*key)) if not fills.empty else fills
-        sh = f["shares"].to_numpy() if not f.empty else np.empty(0)
-        row = dict(zip(passive.CELL_KEYS, key, strict=True))
-        row.update(
-            {
-                "n_win": int(len(g)),
-                "shares_per_win": float((g["bought"] + g["sold"]).sum() / len(g)),
-                "pnl_ex_rebate": float(g["pnl_ex_rebate"].sum()),
-                "rebates": float(g["rebates"].sum()),
-                "pnl": float(pnl.sum()),
-                "pnl_per_win": float(pnl.mean()),
-                "t_stat": float(pnl.mean() / (std / np.sqrt(len(pnl))))
-                if std and std > 0
-                else float("nan"),
-                "max_drawdown": _max_drawdown(pnl),
-            }
-        )
-        for col in ("mo_30s", "mo_res"):
-            v = f[col].to_numpy() if not f.empty else np.empty(0)
-            ok = ~np.isnan(v) if len(v) else np.zeros(0, dtype=bool)
-            row[col] = float((v[ok] * sh[ok]).sum() / sh[ok].sum()) if ok.any() else float("nan")
-        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -156,7 +113,6 @@ def build(settings: Settings) -> tuple[str, str]:
         days=days,
     )
     books = store.load_derived(root, "books", days=days)
-    tape = store.load_derived(root, "trades", days=days)
     resolutions = pd.concat(
         [
             store.load_derived(root, "resolutions", days=days + 1),
@@ -179,13 +135,6 @@ def build(settings: Settings) -> tuple[str, str]:
     summary = summarize_trades(trades)
     agreement = feed_agreement(windows, store.derived_files(root, "feeds", days=days), resolutions)
     brier, cal = calibration(checkpoints(contexts))
-    t0 = time.monotonic()
-    p_fills, p_windows = passive.grid(contexts, tape, PASSIVE_CELLS)
-    p_summary = summarize_passive(p_windows, p_fills)
-    p_markout = passive.markout_by_tau(passive.select(p_fills, PASSIVE_BASE))
-    log.info("passive grid: %d cells in %.0f s", len(PASSIVE_CELLS), time.monotonic() - t0)
-    n_prints = int(len(tape))
-    prints_sized = float((tape["size"].notna() & (tape["size"] > 0)).mean()) if n_prints else 0.0
 
     n_ctx = len(contexts)
     n_res = sum(c.outcome is not None for c in contexts)
@@ -225,22 +174,6 @@ def build(settings: Settings) -> tuple[str, str]:
         "received after `latency_ms` still shows an ask at or below it, size capped by displayed "
         "size and 100 shares. Fees from the market fee schedule.\n",
         _md(summary),
-        "## Passive quoting replay: two-sided quotes on the Up token, inventory held to "
-        "resolution\n",
-        "Quotes are anchor +/- half_spread with linear inventory skew, "
-        f"{PASSIVE_BASE.quote_size:.0f} shares a side, inventory capped at "
-        f"{PASSIVE_BASE.max_inventory:.0f}, live from snapshot "
-        "receive time + `latency_ms` until the next snapshot's quotes go live. A bid is filled "
-        "by taker SELL prints at or below it, an ask by taker BUY prints at or above it, after "
-        "the displayed size at the joined level has printed. Fills through the Down token are "
-        f"not observed. Maker rebate: {PASSIVE_BASE.rebate_share:.0%} of the taker fee on the "
-        f"fill. `tau_min_s` stops quoting inside the last N seconds. Prints in the tape: "
-        f"{n_prints}, share carrying a size: {prints_sized:.1%}. Markouts are share-weighted "
-        "per-share moves of the mid against the fill (negative = adverse).\n",
-        _md(p_summary),
-        "### Markout of passive fills by time to expiry (base cell: mid anchor, half spread "
-        f"{PASSIVE_BASE.half_spread}, latency {PASSIVE_BASE.latency_ms} ms)\n",
-        _md(p_markout),
         "## Model versus market at fixed checkpoints\n",
         _md(brier),
         "### Calibration by model probability decile\n",
@@ -256,13 +189,6 @@ def build(settings: Settings) -> tuple[str, str]:
             f"updown-desk: {n_ctx} windows, {n_res} resolved. Best cell th={best['threshold']} "
             f"lat={best['latency_ms']}ms: n={best['n']}, hit={best['hit_rate']:.2f}, "
             f"pnl={best['pnl_total']:.2f}, t={best['t_stat']:.2f}"
-        )
-    if not p_summary.empty:
-        pb = p_summary.sort_values("t_stat", ascending=False).iloc[0]
-        digest += (
-            f" | passive best {pb['anchor']} h={pb['half_spread']} lat={pb['latency_ms']}ms "
-            f"tau_min={pb['tau_min_s']:.0f}: n={pb['n_win']}, pnl={pb['pnl']:.2f} "
-            f"(rebates {pb['rebates']:.2f}), t={pb['t_stat']:.2f}, mo30s={pb['mo_30s']:.4f}"
         )
     return report, digest
 

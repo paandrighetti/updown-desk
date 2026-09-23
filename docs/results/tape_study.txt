@@ -1,0 +1,45 @@
+ Container updown-desk-reporter-run-ab11ae019203 Creating 
+ Container updown-desk-reporter-run-ab11ae019203 Created 
+data /data: 1577893 prints inside windows, 1298 windows
+
+== 1. coverage per sample
+      sample  days  windows  prints   shares  on_down_token  taker_buys_own_token  with_mid30  with_spot  with_outcome
+ exploration     6     2300  747931 23725608          0.478                 0.892         1.0        1.0           1.0
+confirmation     7     2656  764982 21412823          0.463                 0.890         1.0        1.0           1.0
+
+== 2. realized spread of maker fills, cents per share (t cluster-robust)
+      sample  rs_5s  rs_30s  t_rs_30s  rs_60s  rs_res  t_rs_res  rebate   stat  t_stat
+ exploration -0.240  -0.255     -2.41  -0.209  -0.191     -0.34   0.223 -0.032   -0.31
+confirmation  0.004   0.046      0.73   0.119   0.208      1.13   0.210  0.256    4.05
+stat = rs_30s + rebate. Positive means the resting liquidity earned money.
+
+== 3. stat by bucket and sample
+       family                          bucket  exploration_cents  exploration_t  exploration_windows  exploration_shares  confirmation_cents  confirmation_t  confirmation_windows  confirmation_shares
+        tau_s                         [0, 60)             -0.216          -0.77                  547             2463073               0.370            0.88                   659              1942978
+        tau_s                       [60, 120)             -0.656          -1.17                  565             2919487               0.504            2.20                   661              2455324
+        tau_s                      [120, 300)              0.120           0.75                  574             5723078               0.251            2.25                   662              5457450
+        tau_s                      [300, 600)              0.035           0.31                  575             6424394               0.108            1.89                   660              5607240
+        tau_s                      [600, 901)              0.124           0.94                  575             6195575               0.261            2.63                   662              5949830
+dist_from_0.5                      [0.0, 0.1)             -0.735          -2.60                  575             6173763              -0.048           -0.26                   663              4326364
+dist_from_0.5                      [0.1, 0.3)              0.347           2.71                  575             7800427               0.354            3.60                   664              7007755
+dist_from_0.5                     [0.3, 0.51)              0.109           1.06                  575             9751417               0.319            3.32                   662             10078703
+ spot_move_bp                      [0.0, 1.0)             -0.045          -0.44                  575            18533812               0.231            3.06                   664             15087985
+ spot_move_bp                      [1.0, 5.0)             -0.062          -0.30                  564             4417867               0.395            3.70                   664              5415216
+ spot_move_bp                      [5.0, inf)              0.438           1.63                  471              773928              -0.146           -0.31                   640               909622
+        niche tau>=120, |p-0.5|<0.3, move<1bp              0.010           0.08                  575             9919765               0.133            1.41                   664              6964008
+
+== 4. sanity: by token printed and by maker direction, stat in cents
+      sample token     maker   shares   stat     t  rs_res  t_res
+ exploration  down bought_up 10181180  0.087  0.38   0.028   0.01
+ exploration    up   sold_up 11187670 -0.242 -0.84  -0.680  -0.27
+ exploration    up bought_up  1430897  0.478  1.58  -0.212  -0.11
+ exploration  down   sold_up   925860  0.404  0.96   3.333   1.71
+confirmation    up   sold_up  9773537 -0.006 -0.03  -0.713  -0.54
+confirmation  down bought_up  9129631  0.500  2.52   0.956   0.70
+confirmation    up bought_up  1526672  0.181  0.68   0.964   0.63
+confirmation  down   sold_up   982983  0.716  2.47   1.258   0.78
+
+== 5. pre-registered decision
+qualifying buckets, to be simulated with a follower maker:
+       family     bucket  exploration_t  confirmation_t
+dist_from_0.5 [0.1, 0.3)           2.71             3.6

@@ -1,5 +1,11 @@
 """Replay a passive two-sided quoting strategy over recorded books and the trade tape.
 
+Version 0.2, kept for reproducibility and invalidated as an economic test: book snapshots
+arrive once per trade, so these quotes never move between trades while the real book does,
+and the Down token's flow, which reaches Up quotes because the two books are one, is not
+seen. Measurements and what the resting liquidity earns: docs/passive-quoting.md.
+It is no longer part of the daily report.
+
 The taker replay asked whether the market is mispriced against the model; it is not. This
 module asks the question a liquidity provider would ask instead: is the flow that hits
 resting quotes in these windows benign enough to earn the spread plus the maker rebate,
